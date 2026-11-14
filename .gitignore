@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+
+# OSP output (about 124 MB), made again by run_osp.py and robustness.py
+data/sim_output/
+data/robust/
+# Rewritten by run_osp.py on every batch; holds a path relative to this checkout
+data/OspSystemStructure_batch.xml
