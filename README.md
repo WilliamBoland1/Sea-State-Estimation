@@ -1,5 +1,17 @@
 # Sea state estimation from vessel motions (TMR06)
 
+## Setup
+The simulations run in the DP simulator [ospdpsimpy](https://github.com/Olvegb/ospdpsimpy),
+which this project installs as a package. Steps 2 and 7 run it, and step 4 reads the RAOs
+with it.
+
+1. Check out ospdpsimpy next to this folder (`../ospdpsimpy`, see `SIM_REPO` in `config.py`).
+2. Put `gunnerus.mat` and `GunnerusL35_20201112.mat` in `../ospdpsimpy/data_examples/`. They are not in git.
+3. From this folder, run `py -3.11 -m venv .venv`, then `.venv\Scripts\pip install -r requirements.txt`.
+
+`data/sim_output/` and `data/robust/` (the OSP output, about 124 MB) are not in git:
+`run_osp.py` and `robustness.py` make them again. The results of steps 3 to 7 are in git.
+
 ## Steps
 1. `design_sea_states.py`: writes `data/runs.csv`, the list of sea states to simulate.
 2. `run_osp.py`: runs every row in OSP and writes `data/sim_output/`. A batch that stops can be started again. `python run_osp.py --check` checks the result.
