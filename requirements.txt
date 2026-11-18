@@ -1,3 +1,5 @@
 # pip install -r requirements.txt, from this folder (pip resolves the path from the working folder)
 -e ../ospdpsimpy    # ospfmusim + app: OSP runs, RAO reader, jonswap; brings numpy, scipy, pandas, libcosimpy
 matplotlib
+streamlit   # app.py
+plotly      # app.py

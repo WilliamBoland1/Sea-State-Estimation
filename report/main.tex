@@ -54,7 +54,13 @@ inversion uses a different RAO set from the one the simulator used. Models were 
 repeated five-fold cross-validation on 200 calibration runs and scored once on 50 hidden test
 runs. The hybrid model is best, with a root-mean-square relative error of
 \pct{1.94} in $\Hs$ and \pct{0.74} in $\Tp$ on the test runs, against \pct{4.25} and
-\pct{2.12} for PLS alone and \pct{5.81} and \pct{0.95} for the physics fit alone.
+\pct{2.12} for PLS alone and \pct{5.81} and \pct{0.95} for the physics fit alone. A robustness
+study then rescored the frozen models on 400 further runs, in which the true vessel's heave and
+pitch RAOs were scaled or shifted in frequency, and with other sensor noise levels. A frequency
+shift of 3--5\,\% raises the hybrid's $\Hs$ error to 3.9--6.7\,\%, about the level of the physics
+fit, although it stays the most stable method. A change in sensor noise ruins the purely
+data-driven models (PLS up to \pct{74} in $\Hs$), while the physics fit stays near \pct{5}. The
+gain from the hybrid is therefore tied to the RAO error and the noise level it was trained on.
 \end{abstract}
 
 \tableofcontents
@@ -78,7 +84,7 @@ This first concept answers a narrow question under controlled conditions: \emph{
 can $\Hs$ and $\Tp$ be estimated from 20 minutes of heave and pitch on a DP vessel in head seas,
 and does combining the physics with a data-driven correction help?} The data are simulated so
 that the true sea state is known exactly and every condition can be repeated. The simulator
-is the OSP co-simulation of RV Gunnerus that the rest of this repository builds.
+is the OSP co-simulation of RV Gunnerus in the \texttt{ospdpsimpy} package \citep{ospdpsimpy}.
 
 Three estimators are compared on identical inputs:
 \begin{enumerate}
@@ -89,10 +95,15 @@ Three estimators are compared on identical inputs:
         $\log \Hs$ and $\log \Tp$, trained on the calibration runs.
   \item \textbf{Hybrid}: the physics fit, corrected by a PLS model trained on its residuals.
 \end{enumerate}
+A second question is how much of any gain survives when the vessel or the sensor differs from
+the one the models were trained on, as it will on a real ship whose loading changes.
+\Cref{sec:robustness} answers it with frozen models, a perturbed ``true'' vessel and other
+sensor noise levels.
 
 \Cref{sec:theory} gives the theory behind each step, \cref{sec:process} the process as it is
-implemented in \path{First_concept/}, \cref{sec:decisions} the design decisions and the evidence
-for them, and \cref{sec:results,sec:discussion} the results and their interpretation.
+implemented in the project repository, \cref{sec:decisions} the design decisions and the evidence
+for them, and \cref{sec:results,sec:discussion} the results, including the robustness study, and
+their interpretation.
 \Cref{sec:limitations} lists the limitations, and \cref{sec:repro} explains how to reproduce
 everything.
 
@@ -197,7 +208,8 @@ wave train \cref{eq:superposition} is
             a_k\, e^{\,i(\omega_k t - \varphi_k)} \Big\},
   \label{eq:wf}
 \end{equation}
-which is the formula the vessel model of the simulator uses (\path{src/ospfmusim/hull/helpfunctions/WF.py}).
+which is the formula the vessel model of the simulator uses
+(\path{src/ospfmusim/hull/helpfunctions/WF.py} in \texttt{ospdpsimpy}).
 For a stationary Gaussian sea the response spectrum follows directly:
 \begin{equation}
   S_{x_j}(\omega) = |H_j(\omega, \beta)|^2\, S_\zeta(\omega).
@@ -313,6 +325,15 @@ as an \emph{inverse crime} \citep{kaipio2005}. To avoid it, the inversion here u
 RAO set for RV Gunnerus from the one the simulator used, so the physics method has a realistic,
 unknown model error (\cref{sec:decisions}).
 
+\paragraph{What the motion spectra cannot tell.}
+By \cref{eq:response,eq:hs_scaling}, $S_{x_j} = |H_j|^2\, \Hs^2\, s(\omega; \Tp, \gamma)$. If the
+true RAO amplitude of every motion is $g|H_j|$, the motion spectra are exactly those of the
+nominal vessel in a sea of height $g\Hs$. No method that sees only the motion spectra can tell
+the two apart, so a common gain error in the RAOs passes one to one into $\Hs$ and leaves $\Tp$
+unchanged. A change in the \emph{shape} of the RAO, such as a shift of its natural frequencies
+with loading, changes the motion spectra in a way no sea state can mimic exactly, and is in
+principle partly observable. \Cref{sec:step7} tests both.
+
 \subsection{Multivariate regression on the spectra}
 \label{sec:regression}
 
@@ -416,8 +437,9 @@ spreads $n$ runs evenly over the input space with far fewer runs than a full gri
 \label{sec:process}
 % ==================================================================
 
-The pipeline consists of six scripts in \path{First_concept/}, run in order. All settings are
-in \path{config.py} (\cref{app:config}). \Cref{fig:pipeline} shows the data flow. Every script
+The pipeline consists of seven scripts in the root of the project repository, run in order.
+Steps 1--6 build and score the estimators, and step 7 tests the frozen models under conditions
+they were not fitted to. All settings are in \path{config.py} (\cref{app:config}). \Cref{fig:pipeline} shows the data flow. Every script
 except the first has a \texttt{--check} option that tests its calculation against known answers
 and its output file against the inputs (\cref{tab:checks}).
 
@@ -434,19 +456,28 @@ and its output file against the inputs (\cref{tab:checks}).
     \node[box, right=of s3] (s4) {4. Physics\\[1pt]\texttt{physics.csv}};
     \node[box, right=of s4] (s5) {5. Cross-\\validation\\[1pt]\texttt{cv.csv}};
     \node[box, right=of s5] (s6) {6. Test\\[1pt]\texttt{test.csv}};
-    \foreach \x/\y in {s1/s2, s2/s3, s3/s4, s4/s5, s5/s6}
+    \node[box, below=6mm of s6] (s7) {7. Robustness\\[1pt]\texttt{robust.csv}};
+    \foreach \x/\y in {s1/s2, s2/s3, s3/s4, s4/s5, s5/s6, s6/s7}
       \draw[->] (\x) -- (\y);
+    \draw[->, dashed] (s2.south) |- node[pos=0.75, below, font=\scriptsize]
+      {OSP reruns of the test runs with changed RAOs} (s7.west);
   \end{tikzpicture}
-  \caption{The six steps and the file each one writes in \texttt{data/}. Steps 4--6 all read
-           the spectra of step 3, and steps 5 and 6 also read the physics estimates of step 4.}
+  \caption{The seven steps and the file each one writes in \texttt{data/}. Steps 4--6 all read
+           the spectra of step 3, and steps 5 and 6 also read the physics estimates of step 4.
+           Step 7 reruns the test sea states in OSP with changed RAOs (dashed) and scores the
+           frozen models of step 6 on them.}
   \label{fig:pipeline}
 \end{figure}
 
 \subsection{Simulation platform}
 \label{sec:osp}
 
-The runs are made with the OSP co-simulation of RV Gunnerus (length overall \SI{36.25}{m})
-built in this repository \citep{osp,fmi2014}. Each subsystem is a functional mock-up unit (FMU):
+The runs are made with the OSP co-simulation of RV Gunnerus (length overall \SI{36.25}{m}) in
+the \texttt{ospdpsimpy} package \citep{ospdpsimpy,osp,fmi2014}, which this project installs as a
+dependency. The two are separate repositories, and the dependency is one-way: the simulator
+knows nothing about sea state estimation, and this project only uses its FMUs and run tools,
+its reader for the hydrodynamic data and its JONSWAP function. Each subsystem is a functional
+mock-up unit (FMU):
 \begin{itemize}
   \item a \textbf{wave} FMU that realises the spectrum as \cref{eq:superposition} with up to
         100 components;
@@ -455,7 +486,8 @@ built in this repository \citep{osp,fmi2014}. Each subsystem is a functional moc
   \item a \textbf{DP controller} (PID on surge, sway and yaw), an \textbf{extended Kalman
         filter} with wave filtering, \textbf{thrust allocation} and \textbf{thruster} models.
 \end{itemize}
-All constants not set per run are taken from \path{configs/gunnerus.toml}.
+All constants not set per run are taken from \path{configs/gunnerus.toml}. Both paths are
+inside the simulator repository.
 
 \subsection{Step 1: experimental design}
 \label{sec:step1}
@@ -629,9 +661,37 @@ check also confirms that each test run gets the same estimate when predicted alo
 predicted with the others. That shows no statistic of the test runs (a mean or a scaling)
 enters the models.
 
+\subsection{Step 7: robustness to an unseen vessel or sensor}
+\label{sec:step7}
+
+The hybrid of step 6 corrects one fixed RAO error, the one between
+\path{GunnerusL35_20201112.mat} and \path{gunnerus.mat}, and the calibration and test runs share
+it. On a real vessel the RAOs change with loading after a model has been trained, and the sensor
+may not be the one assumed. \path{robustness.py} therefore freezes everything of step 6 (the
+inversion RAOs, the models fitted on the calibration runs, their numbers of components, and the
+sensor noise level assumed by the physics fit) and changes only the true vessel or the sensor:
+\begin{itemize}
+  \item \textbf{Gain}: heave and pitch $|H|$ of \path{gunnerus.mat} multiplied by
+        $g \in \{0.90, 0.95, 1.05, 1.10\}$.
+  \item \textbf{Shift}: heave and pitch RAO moved in frequency, $|H'(\omega)| = |H(\omega/s)|$,
+        with $s \in \{0.95, 0.97, 1.03, 1.05\}$. The phase is kept, since only $|H|$ enters the
+        spectra. The shift also scales the long-wave pitch RAO (the wave slope $k$) by $1/s^2$, so it
+        stands in for a loading change rather than being a hull model. A draft change of
+        6--10\,\% moves the natural periods by about 3--5\,\%.
+  \item \textbf{Noise}: the sensor noise standard deviation set to 0, 0.05 and 0.10 (m for
+        heave, degrees for pitch) instead of 0.02. No new runs are needed.
+\end{itemize}
+For each gain and shift, the script writes a copy of \path{gunnerus.mat} to \path{data/robust/} in
+which only the motion RAO table is changed, so the DP system sees exactly the same loads. It then
+reruns the 50 test sea states in OSP with that file (\texttt{run\_osp.py --mat ... --out ...},
+about five minutes per file, 400 runs in all). Every condition uses the same sea states, wave
+phases and noise draws (scaled), and the same bootstrap resamples, so a change in error is caused
+by the perturbation alone. Nothing is chosen on these results, so the test runs may be scored
+again. The control condition must reproduce \path{data/test.csv}, which the check confirms.
+
 \begin{table}[htbp]
   \centering
-  \caption{What each \texttt{--check} tests. All five pass on the delivered data.}
+  \caption{What each \texttt{--check} tests. All six pass on the delivered data.}
   \label{tab:checks}
   \small
   \begin{tabular}{@{}p{3.3cm}p{11.7cm}@{}}
@@ -649,6 +709,11 @@ enters the models.
       one PLS component points along $\vect X^{\mathsf T}\vect y$ \\
     \texttt{evaluate.py} & \texttt{test.csv} matches a fresh estimate; no test run influences the
       estimate of another \\
+    \texttt{robustness.py} & each changed \texttt{.mat} file differs from \texttt{gunnerus.mat}
+      only in the heave and pitch $|H|$ (phase, loads and matrices unchanged); the control
+      reproduces \texttt{test.csv}; a gain of 1.10 gives 1.10 times the $\Hs$ of
+      \texttt{fit\_pitch} on every run (measured 1.0998) and the same $\Tp$, which proves OSP
+      used the changed file \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -661,7 +726,7 @@ enters the models.
 \Cref{tab:decisions} summarises the decisions made while building the pipeline, the alternative
 that was rejected, and the evidence. Most numbers come from the delivered scripts and data.
 Those marked \dagnote{} come from exploratory measurements made while the pipeline was being
-designed. Their scripts are not part of \path{First_concept/}, so they should be re-measured
+designed. Their scripts are not part of the repository, so they should be re-measured
 before they are relied on in a different setting. The most important decisions are then
 discussed in more detail.
 
@@ -733,6 +798,11 @@ discussed in more detail.
     The seed-2 runs were used to choose the simulation settings, so they were no longer hidden. \\
   Design & LHS in $(\Tp, u)$, steepness $\le 1/15$, $\gamma = 3.3$ & grid; rejection sampling &
     Even coverage with no discarded samples; every sea state is realistic. \\
+  Robustness test & frozen models; true RAO scaled or shifted and rerun in OSP; noise changed &
+    perturbing only the inversion RAOs; refitting per condition &
+    PLS never sees an RAO, so only a change of the \emph{true} vessel tests it. Refitting would
+    hide the effect of a loading change after training. Only the motion RAO table changes, so
+    the DP loads are identical, and the phases and noise draws are shared. \\
 \end{longtable}
 }
 
@@ -744,7 +814,7 @@ simulator uses \path{gunnerus.mat}. Both describe RV Gunnerus, but they differ, 
 periods below about 8\,s. On real data the RAOs are never exact, so a physics method tested
 with the generating RAOs would be flattered. With the generating RAOs, the fit to both motions
 gives \pct{1.49} RMS error in $\Hs$ and \pct{0.71} in $\Tp$ on the calibration runs, and
-recovers $\gamma = 3.31$ (median) against the true 3.3. With the other RAO file it gives
+recovers a median $\gamma$ of 3.30 against the true 3.3. With the other RAO file it gives
 \pct{6.18} and \pct{0.99}. Almost all of the remaining physics error is therefore model error in
 the RAOs, which is exactly the error the hybrid model is meant to remove.
 
@@ -889,6 +959,88 @@ physics fit is not significant.
   \label{fig:test}
 \end{figure}
 
+\subsection{Robustness to an unseen vessel or sensor}
+\label{sec:robustness}
+
+\Cref{tab:robust} and \cref{fig:robust} give the errors of the frozen models of step 6 on the test
+runs when the true vessel or the sensor changes (\cref{sec:step7}). The control reproduces
+\cref{tab:test} exactly.
+
+\begin{table}[htbp]
+  \centering
+  \caption{RMS relative error [\%] on the 50 test runs when the true vessel or the sensor
+           differs from the one the models were fitted to. The models and the inversion RAOs
+           are those of step 6, and the control row is \cref{tab:test}.}
+  \label{tab:robust}
+  \small
+  \setlength{\tabcolsep}{3.5pt}
+  \begin{tabular}{@{}llrrrrrrrr@{}}
+    \toprule
+    & & \multicolumn{4}{c}{$\Hs$} & \multicolumn{4}{c}{$\Tp$} \\
+    \cmidrule(lr){3-6}\cmidrule(l){7-10}
+    Change & Level & \texttt{fit\_pitch} & \texttt{fit\_all} & PLS & Hybrid
+                   & \texttt{fit\_pitch} & \texttt{fit\_all} & PLS & Hybrid \\
+    \midrule
+    Control          & --   &  4.79 &  5.81 &  4.25 &  1.94 & 1.02 & 0.95 &  2.12 & 0.74 \\
+    \midrule
+    Gain $g$         & 0.90 & 13.96 &  8.90 & 10.48 & 10.28 & 1.01 & 0.96 &  2.25 & 0.75 \\
+                     & 0.95 &  9.28 &  5.48 &  6.25 &  5.44 & 1.01 & 0.96 &  2.17 & 0.74 \\
+                     & 1.05 &  2.31 &  9.51 &  6.93 &  5.30 & 1.03 & 0.94 &  2.09 & 0.73 \\
+                     & 1.10 &  5.78 & 14.15 & 11.40 & 10.14 & 1.03 & 0.94 &  2.10 & 0.73 \\
+    \midrule
+    Shift $s$        & 0.95 &  7.40 &  2.59 & 13.45 &  6.69 & 1.94 & 0.86 &  5.41 & 1.44 \\
+                     & 0.97 &  5.55 &  2.40 &  8.33 &  4.36 & 1.43 & 0.69 &  3.41 & 1.04 \\
+                     & 1.03 &  6.94 &  9.68 & 11.21 &  3.85 & 1.42 & 1.46 &  2.66 & 1.08 \\
+                     & 1.05 &  9.29 & 12.15 & 16.96 &  6.00 & 1.97 & 1.80 &  3.23 & 1.50 \\
+    \midrule
+    Noise $\sigma_n$ & 0    &  4.74 &  6.42 & 28.43 &  7.93 & 1.03 & 1.24 & 18.34 & 4.56 \\
+                     & 0.05 &  5.10 &  5.06 & 30.77 &  5.54 & 1.34 & 0.96 & 13.54 & 2.19 \\
+                     & 0.10 &  5.86 &  5.20 & 74.47 & 10.51 & 2.52 & 2.69 & 26.77 & 3.32 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{robust.png}
+  \caption{Test-run RMS error against the size of each change, for the two physics fits, PLS and
+           the hybrid, with 95\,\% bootstrap intervals. The dotted line marks the condition of
+           step 6. The vertical scales differ between panels.}
+  \label{fig:robust}
+\end{figure}
+
+\paragraph{Gain.}
+As \cref{sec:inverse} predicts, a common gain on the heave and pitch RAOs cannot be detected:
+every method's $\Hs$ follows it, and $\Tp$ is untouched (hybrid 0.73--0.75\,\%). The bias of the
+hybrid moves from $-0.1$\,\% to $-10.1$\,\% at $g = 0.90$ and to $+9.9$\,\% at $g = 1.10$, and
+PLS behaves the same. No method amplifies the gain, so the hybrid error is close to $|g - 1|$
+itself. The physics fits, which start out biased, can be helped as well as hurt:
+\texttt{fit\_pitch}, biased $-4.3$\,\% in the control, improves to \pct{2.31} at $g = 1.05$.
+
+\paragraph{Frequency shift.}
+A shift is the more realistic case, since loading moves the natural periods. Here the advantage
+of the hybrid shrinks. Its $\Hs$ error rises from \pct{1.94} to 3.9--6.7\,\%, and its $\Tp$ error
+from \pct{0.74} to 1.0--1.5\,\%. PLS degrades most ($\Hs$ 8.3--17.0\,\%, $\Tp$ up to
+\pct{5.4}), because it has learned where the spectral features of one particular vessel lie. The
+physics fit reacts asymmetrically: \texttt{fit\_all} improves to 2.4--2.6\,\% for $s < 1$,
+because the shift partly cancels the mismatch between the two RAO files, and rises to \pct{12.2}
+at $s = 1.05$. Over the four shifts the hybrid has the lowest worst case (\pct{6.7}, against
+\pct{12.2} for \texttt{fit\_all} and \pct{17.0} for PLS) and the lowest mean (\pct{5.2}, against
+\pct{6.7} and \pct{12.5}). Its accuracy of about \pct{2} in step 6 is, however, specific to the
+RAO error it was trained on.
+
+\paragraph{Sensor noise.}
+A change of sensor noise hardly affects the physics fits ($\Hs$ 4.7--6.4\,\%, $\Tp$ at most
+\pct{2.7}), even though the fit still assumes the nominal noise level. It ruins PLS: the $\Hs$
+error is \pct{28} with no noise, \pct{31} at 0.05 and \pct{74} at 0.10, with $\Tp$ errors of
+13--27\,\%. The PLS bias in $\Hs$ changes sign with the noise level ($-18.8$\,\% at
+$\sigma_n = 0$, $+27.6$\,\% at 0.05 and $+68.0$\,\% at 0.10), so PLS reads the noise floor as
+wave energy. Of all spectral bins of the 250 runs, \pct{36} of the heave bins and \pct{17} of
+the pitch bins lie within a factor of three of the noise floor (\cref{fig:spectra}). In log scale
+these bins weigh as much as the peak, so the models have learned the floor. The hybrid inherits
+the problem in a weaker form ($\Hs$ 5.5--10.5\,\%, $\Tp$ 2.2--4.6\,\%), because its PLS
+correction reads the same bins.
+
 % ==================================================================
 \section{Discussion}
 \label{sec:discussion}
@@ -915,7 +1067,7 @@ that the model can only explain with larger waves, so the heave fit is \pct{15} 
 frequencies hold the peak of short seas, so the physics error is concentrated at $\Tp < 6$\,s,
 where \texttt{fit\_all} overestimates $\Hs$ by up to about \pct{19} on single runs
 (\cref{fig:test}). The hybrid removes this pattern. The fitted $\gamma$ (median 2.62 instead of
-3.3) is a symptom of the same mismatch: with the generating RAOs the fit recovers 3.31.
+3.3) is a symptom of the same mismatch: with the generating RAOs the fit recovers 3.30.
 
 \paragraph{The simulator adds little error in head seas.}
 PLS on the OSP data (\pct{4.24} in $\Hs$) is close to PLS on data from a direct linear generator
@@ -927,8 +1079,21 @@ correlation between OSP heave and pitch and the linear RAO response\dagnote.
 The test set was drawn with its own seed, never used for any choice, and scored once. Every
 calibration value lies inside the 95\,\% interval of the corresponding test error, and the
 leakage check confirms that no test statistic enters the models. With 50 test runs the interval
-spans roughly $\pm$25--30\,\% of the error itself. Differences smaller than that, such as
-between PLS and PCR, are not significant.
+spans between about $\pm$10\,\% and $\pm$30\,\% of the error itself. Differences smaller than
+that, such as between PLS and PCR, are not significant.
+
+\paragraph{The hybrid learns one RAO error, not RAO errors in general.}
+The robustness study qualifies the main result. The PLS correction of the hybrid learns the
+specific mismatch between the two RAO files, which the calibration and test runs share. When the
+true vessel moves by 3--5\,\% in frequency, the hybrid falls back to roughly the accuracy of the
+physics fit (3.9--6.7\,\% in $\Hs$), although it stays the most stable method across the shifts.
+A common gain error is invisible to every method and passes straight into $\Hs$, so the absolute
+level of the RAOs must come from elsewhere, for instance a model test or a calibration against a
+wave buoy. The noise result is a warning for any data-driven model on log spectra: it must be
+trained at the noise level of the actual sensor, or its features must be made insensitive to it,
+for example by clipping the log spectra at a fixed multiple of the noise floor or by training on
+several noise levels. The physics fit avoids the problem because it models the noise floor
+explicitly and only uses bins where the RAO is large, which mostly lie well above the floor.
 
 % ==================================================================
 \section{Limitations and further work}
@@ -947,36 +1112,58 @@ between PLS and PCR, are not significant.
         unimodal JONSWAP with fixed $\gamma = 3.3$. The data-driven models have never seen
         another $\gamma$, swell or bimodal seas, and are not expected to extrapolate to them.
   \item \textbf{Assumed sensor noise.} \SI{0.02}{m} and $0.02^\circ$ are assumed values, to be
-        replaced by the data sheet of the actual motion sensor.
-  \item \textbf{One RAO pair.} The hybrid learns the difference between two specific RAO files. On
-        a real vessel it would need training data with a reference sea state (a wave buoy or a
-        calibrated simulator).
-  \item \textbf{Test set spent.} The 50 test runs have now been used and must not be used for
-        further tuning. A new comparison needs new test runs.
+        replaced by the data sheet of the actual motion sensor. Step 7 shows that the
+        data-driven models depend strongly on this value (PLS 28--74\,\% in $\Hs$ when it
+        changes), so they must be trained at the real level.
+  \item \textbf{One RAO pair.} The hybrid learns the difference between two specific RAO files,
+        and step 7 shows that most of its gain is lost when the true RAOs shift by 3--5\,\%. On a
+        real vessel it would need training data with a reference sea state (a wave buoy or a
+        calibrated simulator) that covers the loading conditions in operation.
+  \item \textbf{Perturbations are stand-ins.} The gains and shifts of step 7 change heave and pitch
+        together and uniformly over frequency. A real loading change alters the RAO shape in a
+        more complicated way and also changes the DP loads.
+  \item \textbf{Test set spent.} The 50 test runs have been used to score the models of step 6
+        and, without any tuning, the frozen models of step 7. They must not be used for further
+        tuning. A new comparison needs new test runs.
 \end{itemize}
 Natural next steps are oblique and short-crested seas, where roll must be added back and the
 relative wave direction becomes a third target, and where DP heading wander becomes important.
-Others are varying $\gamma$ and bimodal seas, forward speed (encounter frequency), validation on
-full-scale Gunnerus data with a reference buoy, and an uncertainty estimate per prediction.
+Step 7 points to two more: features that are insensitive to the noise floor (clipped log spectra
+or training on several noise levels), and training the hybrid over a range of RAO perturbations,
+so that it learns a family of RAO errors rather than a single one. Others are varying $\gamma$
+and bimodal seas, forward speed (encounter frequency), validation on full-scale Gunnerus data
+with a reference buoy, and an uncertainty estimate per prediction.
 
 % ==================================================================
 \section{Reproducibility}
 \label{sec:repro}
 % ==================================================================
 
-All results can be reproduced from the repository with the commands below, run from
-\path{First_concept/} with the project virtual environment. Steps 3--6 take seconds to minutes
-and do not need OSP. Step 2 takes about 26 minutes with six parallel runs.
+All results can be reproduced from the project repository. It needs the simulator next to it:
+\begin{enumerate}
+  \item Check out \texttt{ospdpsimpy} \citep{ospdpsimpy} next to the project folder, as
+        \path{../ospdpsimpy} (\texttt{SIM\_REPO} in \path{config.py}).
+  \item Put \path{gunnerus.mat} and \path{GunnerusL35_20201112.mat} in
+        \path{../ospdpsimpy/data_examples/}. They are not in git.
+  \item Make a Python 3.11 virtual environment in the project folder and install
+        \path{requirements.txt}, which installs \texttt{ospdpsimpy} as an editable package.
+\end{enumerate}
+Then run the commands below from the repository root. The OSP output (\path{data/sim_output/}
+and \path{data/robust/}, about \SI{124}{MB}) is not in git, but the results of steps 3--7 are.
+Steps 3--6 take seconds to minutes and do not need OSP. Step 2 takes about 26 minutes with six
+parallel runs, and step 7 about 40 minutes (eight RAO files of 50 runs each).
 
 \begin{verbatim}
-python design_sea_states.py            # 1: data/runs.csv, figures/design.png
-python run_osp.py                      # 2: data/sim_output/ (restartable)
-python build_spectra.py                # 3: data/spectra.npz, figures/spectra.png
-python invert_spectra.py               # 4: data/physics.csv
-python cross_validate.py               # 5: data/cv.csv
-python evaluate.py                     # 6: data/test.csv, figures/cv.png, test.png
+python design_sea_states.py   # 1: data/runs.csv, figures/design.png
+python run_osp.py             # 2: data/sim_output/ (restartable)
+python build_spectra.py       # 3: data/spectra.npz, figures/spectra.png
+python invert_spectra.py      # 4: data/physics.csv
+python cross_validate.py      # 5: data/cv.csv
+python evaluate.py            # 6: data/test.csv, figures/cv.png, test.png
+python robustness.py          # 7: data/robust/, data/robust.csv, robust.png
 \end{verbatim}
-Each script except the first accepts \texttt{--check} (\cref{tab:checks}).
+Each script except the first accepts \texttt{--check} (\cref{tab:checks}), and all six pass on the
+delivered data.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
@@ -1018,6 +1205,11 @@ Each script except the first accepts \texttt{--check} (\cref{tab:checks}).
     \texttt{N\_FOLDS} & 5 & cross-validation folds \\
     \texttt{CV\_SEEDS} & 0, 1, 2 & fold seeds \\
     \texttt{MAX\_COMPONENTS} & 40 & largest $A$ tried \\
+    \texttt{SIM\_REPO} & \path{../ospdpsimpy} & simulator repository \\
+    \texttt{TRUE\_MAT} & \texttt{gunnerus.mat} & RAOs the runs were made with \\
+    \texttt{RAO\_GAINS} & 0.90, 0.95, 1.05, 1.10 & step 7: heave and pitch $|H|$ times $g$ \\
+    \texttt{RAO\_SHIFTS} & 0.95, 0.97, 1.03, 1.05 & step 7: heave and pitch $|H(\omega/s)|$ \\
+    \texttt{NOISE\_LEVELS} & 0, 0.05, 0.10 & step 7: sensor noise std [m, deg] \\
     \midrule
     \multicolumn{3}{@{}l}{\emph{Fixed in the scripts}} \\
     \texttt{RAO\_FLOOR} & 0.2 & bins used: $|H| > 0.2\max|H|$ \\

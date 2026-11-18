@@ -1,5 +1,22 @@
 # Sea state estimation from vessel motions (TMR06)
 
+Can we tell how high the waves are (Hs) and how long they are (Tp) from how the ship moves?
+
+## How it works
+1. **Design** (`design_sea_states.py`): choose 250 sea states, 200 to fit on (*calibration*) and 50 hidden until step 6 (*test*). → `data/runs.csv`
+2. **Simulate** (`run_osp.py`): let the ship ride each one in OSP and log heave and pitch. → `data/sim_output/`
+3. **Spectra** (`build_spectra.py`): add sensor noise and turn the motions into spectra. → `data/spectra.npz`
+4. **Physics** (`invert_spectra.py`): divide out the RAO of a similar ship (not the one the runs were made with) and fit a JONSWAP spectrum to get Hs and Tp. → `data/physics.csv`
+5. **Learn** (`cross_validate.py`): cross-validate PLS, PCR and the hybrid (the physics estimate corrected by PLS) on the calibration runs. → `data/cv.csv`
+6. **Test** (`evaluate.py`): score every method once on the test runs. Do not tune anything on what it shows. → `data/test.csv`
+7. **Robustness** (`robustness.py`): score the frozen models again with a changed ship RAO (new OSP runs, about 5 min per vessel) or sensor noise. → `data/robust.csv`
+
+Run a step with `python <script>.py`; `python <script>.py --check` checks its result. The docstring
+at the top of each script says what it does in detail. All settings are in `config.py`.
+
+**See it:** `.venv\Scripts\streamlit run app.py` opens one page per step in the browser, with plots,
+and lets you follow one sea state through all of them.
+
 ## Setup
 The simulations run in the DP simulator [ospdpsimpy](https://github.com/Olvegb/ospdpsimpy),
 which this project installs as a package. Steps 2 and 7 run it, and step 4 reads the RAOs
@@ -12,25 +29,13 @@ with it.
 `data/sim_output/` and `data/robust/` (the OSP output, about 124 MB) are not in git:
 `run_osp.py` and `robustness.py` make them again. The results of steps 3 to 7 are in git.
 
-## Steps
-1. `design_sea_states.py`: writes `data/runs.csv`, the list of sea states to simulate.
-2. `run_osp.py`: runs every row in OSP and writes `data/sim_output/`. A batch that stops can be started again. `python run_osp.py --check` checks the result.
-3. `build_spectra.py`: loads the runs, adds sensor noise, makes Welch spectra and writes `data/spectra.npz` (X and Y) and `figures/spectra.png`. What the file holds is at the top of the script. `python build_spectra.py --check` checks the result.
-4. `invert_spectra.py`: estimates Hs and Tp from the spectra with the RAOs of `GunnerusL35_20201112.mat` alone (not the `gunnerus.mat` the runs were made with), by RAO division and by a JONSWAP fit, and writes `data/physics.csv`. Only cal runs are scored. `python invert_spectra.py --check` checks the units, the smoothing and the fit.
-5. `cross_validate.py`: cross-validates PLS, PCR and a hybrid (the physics estimate of step 4 corrected by PLS) on the cal runs, and writes the error for every number of components to `data/cv.csv`. Step 6 uses its `load()` and `fit_predict()`. `python cross_validate.py --check` checks PLS and PCR against least squares.
-6. `evaluate.py`: fits PLS, PCR and the hybrid on all cal runs with the number of components chosen in step 5, scores them and the physics estimates of step 4 once on the test runs, and writes `data/test.csv`, `figures/cv.png` and `figures/test.png`. Do not tune anything on what it shows. `python evaluate.py --check` checks the file, and that no test run leaks into the models.
-
-7. `robustness.py`: scores the frozen models of step 6 on the test runs again, with a true vessel or a sensor they were not fitted to. It writes copies of `gunnerus.mat` with heave and pitch RAO scaled (`RAO_GAINS`) or moved in frequency (`RAO_SHIFTS`) to `data/robust/`, and reruns the test runs in OSP with each one (`run_osp.py --mat ... --out ...`, about 5 min per file). The sensor noise is also changed (`NOISE_LEVELS`), which needs no new runs. It writes `data/robust.csv` and `figures/robust.png`. `python robustness.py --check` checks the .mat files, that the control gives `data/test.csv` again, and that a gain g gives g times the Hs.
-
-All settings are in `config.py`.
-
 ## What the simulator (OSP) reads: `data/runs.csv`
 One row per run:
 
 | column | meaning |
 |---|---|
 | run_id | e.g. `run_0007` |
-| split | `cal` (fitting) or `test` (hidden until the end) |
+| split | `cal` (calibration, for fitting) or `test` (hidden until the end) |
 | Hs | significant wave height [m] |
 | Tp | peak period [s] |
 | gamma | JONSWAP peak enhancement [-] |
