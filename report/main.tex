@@ -49,18 +49,19 @@ added afterwards. Three families of estimators are compared on the same spectra:
 physics-based inversion through the motion response amplitude operators (RAOs), by spectral
 division and by a parametric JONSWAP fit; (ii) data-driven regression on the log spectra by
 partial least squares (PLS) and principal component regression (PCR); and (iii) a hybrid in
-which PLS corrects the physics estimate. To avoid an overly optimistic physics result, the
+which PLS corrects the physics estimate, following Martens' Continuous, Interpretable,
+Minimalistic Machine Learning (CIM-ML) and called the CIM hybrid. To avoid an overly optimistic physics result, the
 inversion uses a different RAO set from the one the simulator used. Models were selected by
 repeated five-fold cross-validation on 200 calibration runs and scored once on 50 hidden test
-runs. The hybrid model is best, with a root-mean-square relative error of
+runs. The CIM hybrid is best, with a root-mean-square relative error of
 \pct{1.94} in $\Hs$ and \pct{0.74} in $\Tp$ on the test runs, against \pct{4.25} and
 \pct{2.12} for PLS alone and \pct{5.81} and \pct{0.95} for the physics fit alone. A robustness
 study then rescored the frozen models on 400 further runs, in which the true vessel's heave and
 pitch RAOs were scaled or shifted in frequency, and with other sensor noise levels. A frequency
-shift of 3--5\,\% raises the hybrid's $\Hs$ error to 3.9--6.7\,\%, about the level of the physics
+shift of 3--5\,\% raises the CIM hybrid's $\Hs$ error to 3.9--6.7\,\%, about the level of the physics
 fit, although it stays the most stable method. A change in sensor noise ruins the purely
 data-driven models (PLS up to \pct{74} in $\Hs$), while the physics fit stays near \pct{5}. The
-gain from the hybrid is therefore tied to the RAO error and the noise level it was trained on.
+gain from the CIM hybrid is therefore tied to the RAO error and the noise level it was trained on.
 \end{abstract}
 
 \tableofcontents
@@ -93,7 +94,7 @@ Three estimators are compared on identical inputs:
         the simulated runs.
   \item \textbf{Data-driven regression}: PLS and PCR from the log motion spectra to
         $\log \Hs$ and $\log \Tp$, trained on the calibration runs.
-  \item \textbf{Hybrid}: the physics fit, corrected by a PLS model trained on its residuals.
+  \item \textbf{CIM hybrid}: the physics fit, corrected by a PLS model trained on its residuals.
 \end{enumerate}
 A second question is how much of any gain survives when the vessel or the sensor differs from
 the one the models were trained on, as it will on a real ship whose loading changes.
@@ -387,10 +388,14 @@ $\hat{\vect y} = (\tilde{\vect x}\vect B) \odot \vect s_Y + \bar{\vect y}$, and 
 the prediction is the training mean. With all $A = p$ components, and $\tilde{\vect X}$ of full
 column rank, both PCR and PLS reduce to ordinary least squares. The implementation uses this as a check.
 
-\subsection{Hybrid model}
+\subsection{CIM hybrid model}
 \label{sec:hybrid}
 
-The hybrid model keeps the physics estimate as the backbone and lets the data correct it:
+The hybrid follows the Continuous, Interpretable, Minimalistic Machine Learning (CIM-ML)
+approach of \citet{martens2025}: first model the known variation from domain knowledge, then let
+a transparent, low-dimensional data-driven model learn only the systematic variation that this
+knowledge misses. It is therefore called the CIM hybrid. It keeps the physics estimate as the
+backbone and lets the data correct it:
 \begin{equation}
   \ln \hat{\vect y} = \ln \hat{\vect y}_{\text{phys}} + \hat{\vect r}(\vect x),
   \qquad
@@ -403,6 +408,13 @@ components, the correction can depend on the shape of the spectrum, for instance
 energy lies relative to frequency bands where the RAO is wrong. The physics carries the
 nonlinear structure (the peak position and the $\Hs$ scaling), so the data-driven part only has
 to learn a smooth, systematic model error.
+
+Of the three properties in CIM-ML, the model has two. It is \emph{interpretable}: the backbone
+is the RAOs and the JONSWAP spectrum, and the correction is one additive term in log units. It
+is \emph{minimalistic}: the correction is a PLS model with few components, and $A = 0$ is a plain
+bias correction. It is not \emph{continuous}: CIM-ML keeps learning as new measurements arrive,
+whereas the CIM hybrid is trained once on the calibration runs and then frozen. The name refers
+to the approach it follows, not a complete CIM-ML implementation.
 
 \subsection{Model selection and validation}
 \label{sec:validation}
@@ -638,15 +650,15 @@ deg/m). Five estimates are made per run:
 The model \cref{eq:model} is evaluated on a grid eight times finer than the Welch bins, extended
 by four bins on each side. It is convolved with the leakage kernel, which is the squared
 magnitude of the zero-padded Fourier transform of the Hann window, normalised to unit sum, and
-then sampled at the bins. The test runs are estimated as well, because the hybrid model needs
+then sampled at the bins. The test runs are estimated as well, because the CIM hybrid model needs
 them in step 6, but only the calibration runs are scored here. Nothing in this step is fitted to
 the simulated runs.
 
-\subsection{Step 5: cross-validation of PLS, PCR and the hybrid}
+\subsection{Step 5: cross-validation of PLS, PCR and the CIM hybrid}
 \label{sec:step5}
 
 \path{cross_validate.py} cross-validates three models on the 200 calibration runs only, as in
-\cref{sec:validation}: PLS2 and PCR on $\vect X$, and the hybrid \cref{eq:hybrid} with
+\cref{sec:validation}: PLS2 and PCR on $\vect X$, and the CIM hybrid \cref{eq:hybrid} with
 \texttt{fit\_all} as the physics estimate. PLS and PCR are implemented in a few lines of NumPy
 via the singular value decomposition. All scaling is fitted inside each training fold.
 The error of every model for every number of components is written to \path{data/cv.csv}.
@@ -664,7 +676,7 @@ enters the models.
 \subsection{Step 7: robustness to an unseen vessel or sensor}
 \label{sec:step7}
 
-The hybrid of step 6 corrects one fixed RAO error, the one between
+The CIM hybrid of step 6 corrects one fixed RAO error, the one between
 \path{GunnerusL35_20201112.mat} and \path{gunnerus.mat}, and the calibration and test runs share
 it. On a real vessel the RAOs change with loading after a model has been trained, and the sensor
 may not be the one assumed. \path{robustness.py} therefore freezes everything of step 6 (the
@@ -792,7 +804,7 @@ discussed in more detail.
   Implementation & NumPy PLS2 and PCR via SVD & scikit-learn &
     Not installed in the environment, and a few lines each. Verified against least squares. \\
   Model selection & 5 folds $\times$ 3 seeds, $A = 0..40$, minimum of $\varepsilon_{\Hs} +
-    \varepsilon_{\Tp}$ & single split & Seed spread $\le 0.07$ points for the hybrid. 40
+    \varepsilon_{\Tp}$ & single split & Seed spread $\le 0.07$ points for the CIM hybrid. 40
     components were needed to see the PCR minimum. \\
   Test set & 50 runs, LHS seed 3, scored once & seed 2 &
     The seed-2 runs were used to choose the simulation settings, so they were no longer hidden. \\
@@ -816,7 +828,7 @@ with the generating RAOs would be flattered. With the generating RAOs, the fit t
 gives \pct{1.49} RMS error in $\Hs$ and \pct{0.71} in $\Tp$ on the calibration runs, and
 recovers a median $\gamma$ of 3.30 against the true 3.3. With the other RAO file it gives
 \pct{6.18} and \pct{0.99}. Almost all of the remaining physics error is therefore model error in
-the RAOs, which is exactly the error the hybrid model is meant to remove.
+the RAOs, which is exactly the error the CIM hybrid model is meant to remove.
 
 \subsection{Top of the wave grid}
 \label{sec:dec_grid}
@@ -885,10 +897,10 @@ $\gamma$ from \texttt{fit\_all} is 2.62, against a true value of 3.3.
 
 Five components hold \pct{90} of the variance of the scaled calibration spectra, and 19 hold
 \pct{99}. \Cref{tab:cv} and \cref{fig:cv} give the cross-validated error. With no components,
-PLS and PCR predict the mean sea state (\pct{76.8} error in $\Hs$ and \pct{40.4} in $\Tp$), while the hybrid with
+PLS and PCR predict the mean sea state (\pct{76.8} error in $\Hs$ and \pct{40.4} in $\Tp$), while the CIM hybrid with
 no components, which is the physics fit with its mean bias removed, already gives \pct{5.38} and
 \pct{0.78}. PLS reaches its minimum at 7 components. PCR needs 25 and improves slowly, as
-expected for components chosen without regard to the targets. The hybrid needs only 4.
+expected for components chosen without regard to the targets. The CIM hybrid needs only 4.
 
 \begin{table}[htbp]
   \centering
@@ -901,7 +913,7 @@ expected for components chosen without regard to the targets. The hybrid needs o
     \midrule
     PLS    &  7 & 4.22 & 2.34 \\
     PCR    & 25 & 4.30 & 2.17 \\
-    Hybrid &  4 & 1.76 & 0.71 \\
+    CIM hybrid &  4 & 1.76 & 0.71 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -919,7 +931,7 @@ expected for components chosen without regard to the targets. The hybrid needs o
 \Cref{tab:test} gives the single evaluation on the 50 hidden test runs, and \cref{fig:test}
 shows the error of each test run against its true peak period. For every method and both
 targets, the calibration value lies inside the 95\,\% interval of the test error, so the choices
-made on the calibration runs did not overfit. The hybrid has the lowest error in both $\Hs$ and
+made on the calibration runs did not overfit. The CIM hybrid has the lowest error in both $\Hs$ and
 $\Tp$. Its interval for $\Hs$ (1.34--2.50\,\%) lies entirely below those of every other method.
 For $\Tp$ its interval overlaps that of \texttt{fit\_all}, so on 50 runs the gain in $\Tp$ over the
 physics fit is not significant.
@@ -946,7 +958,7 @@ physics fit is not significant.
     \midrule
     PLS                    &  7 &  4.22 &  4.25 &  3.23--5.22  &  $+0.30$ & 2.34 & 2.12 & 1.72--2.51 & $-0.20$ \\
     PCR                    & 25 &  4.30 &  3.96 &  3.01--4.84  &  $+0.35$ & 2.17 & 2.12 & 1.72--2.50 & $-0.13$ \\
-    \textbf{Hybrid}        &  4 &  1.76 & \textbf{1.94} &  1.34--2.50 & $-0.11$ & 0.71 & \textbf{0.74} & 0.57--0.91 & $-0.04$ \\
+    \textbf{CIM hybrid}    &  4 &  1.76 & \textbf{1.94} &  1.34--2.50 & $-0.11$ & 0.71 & \textbf{0.74} & 0.57--0.91 & $-0.04$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -955,7 +967,7 @@ physics fit is not significant.
   \centering
   \includegraphics[width=\textwidth]{test.png}
   \caption{Relative error of each test run against its true $\Tp$, for the physics fit
-           \texttt{fit\_all}, PLS and the hybrid.}
+           \texttt{fit\_all}, PLS and the CIM hybrid.}
   \label{fig:test}
 \end{figure}
 
@@ -978,8 +990,8 @@ runs when the true vessel or the sensor changes (\cref{sec:step7}). The control 
     \toprule
     & & \multicolumn{4}{c}{$\Hs$} & \multicolumn{4}{c}{$\Tp$} \\
     \cmidrule(lr){3-6}\cmidrule(l){7-10}
-    Change & Level & \texttt{fit\_pitch} & \texttt{fit\_all} & PLS & Hybrid
-                   & \texttt{fit\_pitch} & \texttt{fit\_all} & PLS & Hybrid \\
+    Change & Level & \texttt{fit\_pitch} & \texttt{fit\_all} & PLS & CIM hybrid
+                   & \texttt{fit\_pitch} & \texttt{fit\_all} & PLS & CIM hybrid \\
     \midrule
     Control          & --   &  4.79 &  5.81 &  4.25 &  1.94 & 1.02 & 0.95 &  2.12 & 0.74 \\
     \midrule
@@ -1004,27 +1016,27 @@ runs when the true vessel or the sensor changes (\cref{sec:step7}). The control 
   \centering
   \includegraphics[width=\textwidth]{robust.png}
   \caption{Test-run RMS error against the size of each change, for the two physics fits, PLS and
-           the hybrid, with 95\,\% bootstrap intervals. The dotted line marks the condition of
+           the CIM hybrid, with 95\,\% bootstrap intervals. The dotted line marks the condition of
            step 6. The vertical scales differ between panels.}
   \label{fig:robust}
 \end{figure}
 
 \paragraph{Gain.}
 As \cref{sec:inverse} predicts, a common gain on the heave and pitch RAOs cannot be detected:
-every method's $\Hs$ follows it, and $\Tp$ is untouched (hybrid 0.73--0.75\,\%). The bias of the
-hybrid moves from $-0.1$\,\% to $-10.1$\,\% at $g = 0.90$ and to $+9.9$\,\% at $g = 1.10$, and
-PLS behaves the same. No method amplifies the gain, so the hybrid error is close to $|g - 1|$
+every method's $\Hs$ follows it, and $\Tp$ is untouched (CIM hybrid 0.73--0.75\,\%). The bias of the
+CIM hybrid moves from $-0.1$\,\% to $-10.1$\,\% at $g = 0.90$ and to $+9.9$\,\% at $g = 1.10$, and
+PLS behaves the same. No method amplifies the gain, so the CIM hybrid error is close to $|g - 1|$
 itself. The physics fits, which start out biased, can be helped as well as hurt:
 \texttt{fit\_pitch}, biased $-4.3$\,\% in the control, improves to \pct{2.31} at $g = 1.05$.
 
 \paragraph{Frequency shift.}
 A shift is the more realistic case, since loading moves the natural periods. Here the advantage
-of the hybrid shrinks. Its $\Hs$ error rises from \pct{1.94} to 3.9--6.7\,\%, and its $\Tp$ error
+of the CIM hybrid shrinks. Its $\Hs$ error rises from \pct{1.94} to 3.9--6.7\,\%, and its $\Tp$ error
 from \pct{0.74} to 1.0--1.5\,\%. PLS degrades most ($\Hs$ 8.3--17.0\,\%, $\Tp$ up to
 \pct{5.4}), because it has learned where the spectral features of one particular vessel lie. The
 physics fit reacts asymmetrically: \texttt{fit\_all} improves to 2.4--2.6\,\% for $s < 1$,
 because the shift partly cancels the mismatch between the two RAO files, and rises to \pct{12.2}
-at $s = 1.05$. Over the four shifts the hybrid has the lowest worst case (\pct{6.7}, against
+at $s = 1.05$. Over the four shifts the CIM hybrid has the lowest worst case (\pct{6.7}, against
 \pct{12.2} for \texttt{fit\_all} and \pct{17.0} for PLS) and the lowest mean (\pct{5.2}, against
 \pct{6.7} and \pct{12.5}). Its accuracy of about \pct{2} in step 6 is, however, specific to the
 RAO error it was trained on.
@@ -1037,7 +1049,7 @@ error is \pct{28} with no noise, \pct{31} at 0.05 and \pct{74} at 0.10, with $\T
 $\sigma_n = 0$, $+27.6$\,\% at 0.05 and $+68.0$\,\% at 0.10), so PLS reads the noise floor as
 wave energy. Of all spectral bins of the 250 runs, \pct{36} of the heave bins and \pct{17} of
 the pitch bins lie within a factor of three of the noise floor (\cref{fig:spectra}). In log scale
-these bins weigh as much as the peak, so the models have learned the floor. The hybrid inherits
+these bins weigh as much as the peak, so the models have learned the floor. The CIM hybrid inherits
 the problem in a weaker form ($\Hs$ 5.5--10.5\,\%, $\Tp$ 2.2--4.6\,\%), because its PLS
 correction reads the same bins.
 
@@ -1046,13 +1058,13 @@ correction reads the same bins.
 \label{sec:discussion}
 % ==================================================================
 
-\paragraph{Physics is best for the period, data for the height, and the hybrid for both.}
+\paragraph{Physics is best for the period, data for the height, and the CIM hybrid for both.}
 The JONSWAP fit locates the spectral peak precisely (\pct{0.95} in $\Tp$ on the test runs),
 because the period is set by the position of the peak, which a wrong RAO amplitude barely
 moves. The wave height, in contrast, is inversely proportional to the RAO amplitude, so the RAO
 error passes straight into $\Hs$. PLS has the opposite profile. $\Hs$ is a linear direction in
 log feature space \cref{eq:log_linear}, while $\Tp$ requires several components to follow the
-peak along the frequency axis. The hybrid inherits the $\Tp$ accuracy of the physics, and its
+peak along the frequency axis. The CIM hybrid inherits the $\Tp$ accuracy of the physics, and its
 PLS correction removes most of the $\Hs$ error. On the test runs it reaches \pct{1.94}, close to
 the \pct{1.49} (calibration runs) of the physics fit with the \emph{correct} RAOs. In this setting, a few PLS components learn most of what the RAO
 mismatch costs.
@@ -1066,7 +1078,7 @@ The heave RAO of the L35 file has a notch at 0.18--0.26\,Hz. There the measured 
 that the model can only explain with larger waves, so the heave fit is \pct{15} high. These
 frequencies hold the peak of short seas, so the physics error is concentrated at $\Tp < 6$\,s,
 where \texttt{fit\_all} overestimates $\Hs$ by up to about \pct{19} on single runs
-(\cref{fig:test}). The hybrid removes this pattern. The fitted $\gamma$ (median 2.62 instead of
+(\cref{fig:test}). The CIM hybrid removes this pattern. The fitted $\gamma$ (median 2.62 instead of
 3.3) is a symptom of the same mismatch: with the generating RAOs the fit recovers 3.30.
 
 \paragraph{The simulator adds little error in head seas.}
@@ -1082,10 +1094,10 @@ leakage check confirms that no test statistic enters the models. With 50 test ru
 spans between about $\pm$10\,\% and $\pm$30\,\% of the error itself. Differences smaller than
 that, such as between PLS and PCR, are not significant.
 
-\paragraph{The hybrid learns one RAO error, not RAO errors in general.}
-The robustness study qualifies the main result. The PLS correction of the hybrid learns the
+\paragraph{The CIM hybrid learns one RAO error, not RAO errors in general.}
+The robustness study qualifies the main result. The PLS correction of the CIM hybrid learns the
 specific mismatch between the two RAO files, which the calibration and test runs share. When the
-true vessel moves by 3--5\,\% in frequency, the hybrid falls back to roughly the accuracy of the
+true vessel moves by 3--5\,\% in frequency, the CIM hybrid falls back to roughly the accuracy of the
 physics fit (3.9--6.7\,\% in $\Hs$), although it stays the most stable method across the shifts.
 A common gain error is invisible to every method and passes straight into $\Hs$, so the absolute
 level of the RAOs must come from elsewhere, for instance a model test or a calibration against a
@@ -1115,10 +1127,13 @@ explicitly and only uses bins where the RAO is large, which mostly lie well abov
         replaced by the data sheet of the actual motion sensor. Step 7 shows that the
         data-driven models depend strongly on this value (PLS 28--74\,\% in $\Hs$ when it
         changes), so they must be trained at the real level.
-  \item \textbf{One RAO pair.} The hybrid learns the difference between two specific RAO files,
+  \item \textbf{One RAO pair.} The CIM hybrid learns the difference between two specific RAO files,
         and step 7 shows that most of its gain is lost when the true RAOs shift by 3--5\,\%. On a
         real vessel it would need training data with a reference sea state (a wave buoy or a
         calibrated simulator) that covers the loading conditions in operation.
+  \item \textbf{Not continuous.} The CIM hybrid is fitted once and then frozen, so it lacks the
+        continuous learning of CIM-ML \citep{martens2025}. Step 7 shows the cost: when the
+        vessel changes, nothing in the model updates.
   \item \textbf{Perturbations are stand-ins.} The gains and shifts of step 7 change heave and pitch
         together and uniformly over frequency. A real loading change alters the RAO shape in a
         more complicated way and also changes the DP loads.
@@ -1129,8 +1144,9 @@ explicitly and only uses bins where the RAO is large, which mostly lie well abov
 Natural next steps are oblique and short-crested seas, where roll must be added back and the
 relative wave direction becomes a third target, and where DP heading wander becomes important.
 Step 7 points to two more: features that are insensitive to the noise floor (clipped log spectra
-or training on several noise levels), and training the hybrid over a range of RAO perturbations,
-so that it learns a family of RAO errors rather than a single one. Others are varying $\gamma$
+or training on several noise levels), and training the CIM hybrid over a range of RAO perturbations,
+so that it learns a family of RAO errors rather than a single one. Updating the correction as
+new data arrive would add the missing continuous part of CIM-ML. Others are varying $\gamma$
 and bimodal seas, forward speed (encounter frequency), validation on full-scale Gunnerus data
 with a reference buoy, and an uncertainty estimate per prediction.
 
@@ -1215,7 +1231,7 @@ delivered data.
     \texttt{RAO\_FLOOR} & 0.2 & bins used: $|H| > 0.2\max|H|$ \\
     \texttt{GAMMA\_START} & 3.3 & start value of the fit \\
     \texttt{OVERSAMPLE}, \texttt{REACH} & 8, 4 & fine grid per bin; kernel half-width in bins \\
-    \texttt{HYBRID\_BASE} & \texttt{fit\_all} & physics estimate corrected by the hybrid \\
+    \texttt{HYBRID\_BASE} & \texttt{fit\_all} & physics estimate corrected by the CIM hybrid \\
     \texttt{N\_BOOTSTRAP} & 2000 & bootstrap resamples \\
     \bottomrule
   \end{tabular}

@@ -7,7 +7,7 @@ Can we tell how high the waves are (Hs) and how long they are (Tp) from how the 
 2. **Simulate** (`run_osp.py`): let the ship ride each one in OSP and log heave and pitch. → `data/sim_output/`
 3. **Spectra** (`build_spectra.py`): add sensor noise and turn the motions into spectra. → `data/spectra.npz`
 4. **Physics** (`invert_spectra.py`): divide out the RAO of a similar ship (not the one the runs were made with) and fit a JONSWAP spectrum to get Hs and Tp. → `data/physics.csv`
-5. **Learn** (`cross_validate.py`): cross-validate PLS, PCR and the hybrid (the physics estimate corrected by PLS) on the calibration runs. → `data/cv.csv`
+5. **Learn** (`cross_validate.py`): cross-validate PLS, PCR and the CIM hybrid (the physics estimate corrected by PLS, following Martens' CIM-ML but trained once, not continuously) on the calibration runs. → `data/cv.csv`
 6. **Test** (`evaluate.py`): score every method once on the test runs. Do not tune anything on what it shows. → `data/test.csv`
 7. **Robustness** (`robustness.py`): score the frozen models again with a changed ship RAO (new OSP runs, about 5 min per vessel) or sensor noise. → `data/robust.csv`
 
@@ -23,8 +23,26 @@ which this project installs as a package. Steps 2 and 7 run it, and step 4 reads
 with it.
 
 1. Check out ospdpsimpy next to this folder (`../ospdpsimpy`, see `SIM_REPO` in `config.py`).
-2. Put `gunnerus.mat` and `GunnerusL35_20201112.mat` in `../ospdpsimpy/data_examples/`. They are not in git.
+2. Put the two vessel files, `gunnerus.mat` and `GunnerusL35_20201112.mat`, in `../ospdpsimpy/data_examples/`. They are not in git.
 3. From this folder, run `py -3.11 -m venv .venv`, then `.venv\Scripts\pip install -r requirements.txt`.
+
+## The two vessel files
+Both files describe Gunnerus, but they come from separate hydrodynamic calculations. That is on
+purpose: at sea nobody knows a ship's RAO exactly, so the method must not get the one the runs
+were made with.
+
+| | `gunnerus.mat`: *the true ship* | `GunnerusL35_20201112.mat`: *our model* |
+|---|---|---|
+| Job | makes the runs (steps 2 and 7) | step 4 divides the motion spectra by its RAOs |
+| Read by | OSP, through `mat_file` in `../ospdpsimpy/configs/gunnerus.toml`. As `TRUE_MAT`, step 7 makes changed copies of it and the app plots it | `invert_spectra.py`, as `INVERSION_MAT`. Through the physics estimate it also feeds the CIM hybrid in steps 5 to 7 |
+| Hull | Lpp 35.3 m, draught 3.2 m, 555 t, GM_T 1.74 m | Lpp 33.9 m, draught 2.8 m, 574 t, GM_T 2.30 m |
+| RAO table | 100 frequencies up to π rad/s, zero speed only | 36 frequencies up to 4.2 rad/s, 7 speeds |
+
+In head seas, the heave RAOs agree within 4 % up to 0.16 Hz. Above that, the model's heave RAO
+is lower (40 % lower at 0.2 Hz). The model's pitch RAO is 4 to 8 % higher between 0.08 and
+0.2 Hz, and peaks at 0.182 Hz instead of 0.187 Hz. This mismatch causes most of the physics
+method's Hs error. The app's step 4 page plots both. PLS and PCR use neither file: they learn
+only from the runs.
 
 `data/sim_output/` and `data/robust/` (the OSP output, about 124 MB) are not in git:
 `run_osp.py` and `robustness.py` make them again. The results of steps 3 to 7 are in git.

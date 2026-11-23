@@ -34,6 +34,12 @@ MAX_INTERNAL_STEP_S = 0.25                 # longest step of the vessel's low-fr
 OSP_CONFIG = SIM_REPO / "configs" / "gunnerus.toml"   # all other constants of the simulation
 N_WORKERS = 6          # runs at the same time
 
+# ---------------------------------------------------------------- the two vessel files
+# Both are Gunnerus, from separate hydrodynamic calculations (README: "The two vessel files").
+# They differ on purpose, so the physics method does not get the hull model for free.
+TRUE_MAT = SIM_REPO / "data_examples" / "gunnerus.mat"   # makes the runs: same file as mat_file in OSP_CONFIG
+INVERSION_MAT = SIM_REPO / "data_examples" / "GunnerusL35_20201112.mat"   # step 4 divides by its RAOs
+
 # ---------------------------------------------------------------- motions
 # Column names in each output file. Roll is left out: in head seas it has no wave signal.
 # Add it back together with oblique headings.
@@ -50,9 +56,6 @@ SENSOR_NOISE_STD = {"heave": 0.02, "roll": 0.02, "pitch": 0.02}
 NOISE_SEED = 1
 
 # ---------------------------------------------------------------- physics inversion
-# RAOs used to invert. NOT gunnerus.mat, which the runs were made with, so the method does
-# not get the hull model for free.
-INVERSION_MAT = SIM_REPO / "data_examples" / "GunnerusL35_20201112.mat"
 PHYSICS_FILE = DATA_DIR / "physics.csv"    # Hs and Tp per run, from invert_spectra.py
 
 # ---------------------------------------------------------------- cross-validation
@@ -68,7 +71,6 @@ TEST_FILE = DATA_DIR / "test.csv"  # every estimate on the test runs, from evalu
 # The test runs again, with a "true vessel" the models have not seen or a noisier sensor.
 ROBUST_DIR = DATA_DIR / "robust"   # the changed .mat files and their runs, from robustness.py
 ROBUST_FILE = DATA_DIR / "robust.csv"
-TRUE_MAT = SIM_REPO / "data_examples" / "gunnerus.mat"   # what the runs were made with
 RAO_GAINS = [0.90, 0.95, 1.05, 1.10]    # heave and pitch |RAO| times this
 RAO_SHIFTS = [0.95, 0.97, 1.03, 1.05]   # heave and pitch RAO moved to this times the frequency
 NOISE_LEVELS = [0.0, 0.05, 0.10]        # sensor noise std [m, deg]; 0.02 is the control

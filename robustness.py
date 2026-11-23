@@ -45,7 +45,7 @@ from scipy.io import loadmat, savemat
 
 import config as C
 from build_spectra import COLORS, SOFT, SURFACE, run_spectra, save, style
-from cross_validate import HYBRID_BASE, TARGETS, load, rms_error
+from cross_validate import HYBRID_BASE, LABEL, TARGETS, load, rms_error
 from evaluate import N_BOOTSTRAP, chosen, predict
 from invert_spectra import (METHODS, estimate, fine_grid, noise_level, rao_squared,
                             welch_kernel)
@@ -191,7 +191,7 @@ def plot(table):
             for method, (color, dash) in SHOWN.items():
                 rows = table[(table.kind == kind) & (table.method == method)].sort_values("level")
                 ax.plot(rows.level, rows[f"{target}_rms"], color=color, ls=dash, lw=1.4,
-                        marker="o", ms=4, label=method)
+                        marker="o", ms=4, label=LABEL.get(method, method))
                 ax.fill_between(rows.level, rows[f"{target}_low"], rows[f"{target}_high"],
                                 color=color, alpha=0.12, lw=0)
             ax.axvline(NOMINAL[kind], color=SOFT, lw=0.8, ls=":")

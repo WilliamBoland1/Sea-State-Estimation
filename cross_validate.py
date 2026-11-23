@@ -15,6 +15,8 @@ pls     partial least squares (PLS2, both targets at once) on the spectra
 pcr     least squares on the first principal components of the spectra
 hybrid  the physics estimate HYBRID_BASE from step 4, corrected by PLS on the spectra:
         log Y = log Y_physics + PLS(X). With 0 components only its mean bias is removed.
+        Shown as "CIM hybrid": it follows Martens' CIM-ML (known physics first, a small
+        PLS model for what it misses), but is trained once, not continuously.
 
 Cross-validation
 ----------------
@@ -36,6 +38,8 @@ import config as C
 
 TARGETS = ["Hs", "Tp"]
 HYBRID_BASE = "fit_all"     # the physics estimate in physics.csv that the hybrid corrects
+# Name shown in figures: the hybrid follows Martens' CIM-ML, minus the continuous updating.
+LABEL = {"hybrid": "CIM hybrid"}
 
 
 def autoscale(train, *others):

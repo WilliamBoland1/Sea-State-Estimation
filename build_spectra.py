@@ -24,7 +24,7 @@ import argparse
 
 import numpy as np
 import pandas as pd
-from scipy.signal import welch
+from scipy.signal import spectrogram, welch
 
 import config as C
 
@@ -39,12 +39,23 @@ def spectrum(signal, dt):
     return welch(signal, fs=1.0 / dt, nperseg=nperseg, noverlap=round(nperseg * C.WELCH_OVERLAP))
 
 
+def pieces(signal, dt):
+    """The spectrum of every Welch segment: (frequency [Hz], density (frequencies, segments)).
+
+    Same settings as spectrum(), whose result is their mean.
+    """
+    nperseg = round(C.WELCH_SEGMENT_S / dt)
+    freq, _, density = spectrogram(signal, fs=1.0 / dt, window="hann", nperseg=nperseg,
+                                   noverlap=round(nperseg * C.WELCH_OVERLAP), mode="psd")
+    return freq, density
+
+
 def in_band(freq):
     return (freq >= C.FREQ_RANGE_HZ[0]) & (freq <= C.FREQ_RANGE_HZ[1])
 
 
-def run_spectra(row, folder=C.OUTPUT_DIR, noise_std=C.SENSOR_NOISE_STD):
-    """The spectra of one row of runs.csv, shape (motions, frequencies), and their frequencies.
+def noisy_record(row, folder=C.OUTPUT_DIR, noise_std=C.SENSOR_NOISE_STD):
+    """The analysed record of one row of runs.csv plus sensor noise, shape (motions, samples).
 
     folder holds the output file; noise_std is the sensor noise per motion. Another
     noise_std scales the same random draws, so runs stay comparable.
@@ -55,13 +66,15 @@ def run_spectra(row, folder=C.OUTPUT_DIR, noise_std=C.SENSOR_NOISE_STD):
         raise ValueError(f"{row.run_id}: expected {row.duration_s} s of data, "
                          f"found {len(record)} samples")
     rng = np.random.default_rng([C.NOISE_SEED, int(row.wave_seed)])    # same noise every time
-    spectra = []
-    for motion in C.MOTIONS:
-        noise = rng.normal(0.0, noise_std[motion], len(record))
-        noisy = record[motion].to_numpy() + noise
-        freq, density = spectrum(noisy, row.dt_s)
-        spectra.append(density[in_band(freq)])
-    return np.array(spectra), freq[in_band(freq)]
+    return np.array([record[m].to_numpy() + rng.normal(0.0, noise_std[m], len(record))
+                     for m in C.MOTIONS])
+
+
+def run_spectra(row, folder=C.OUTPUT_DIR, noise_std=C.SENSOR_NOISE_STD):
+    """The spectra of one row of runs.csv, shape (motions, frequencies), and their frequencies."""
+    spectra = [spectrum(x, row.dt_s) for x in noisy_record(row, folder, noise_std)]
+    keep = in_band(spectra[0][0])
+    return np.array([density[keep] for _, density in spectra]), spectra[0][0][keep]
 
 
 def build():
@@ -140,6 +153,7 @@ def check():
     noise = np.random.default_rng(0).normal(0.0, std, len(t))
     _, density = spectrum(noise, dt)
     assert np.isclose(density.mean(), 2.0 * std**2 * dt, rtol=0.05), "white noise level"
+    assert np.allclose(pieces(noise, dt)[1].mean(axis=1), density), "pieces must average to Welch"
 
     runs = pd.read_csv(C.RUNS_FILE)
     with np.load(C.SPECTRA_FILE) as data:

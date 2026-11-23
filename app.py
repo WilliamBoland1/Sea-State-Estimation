@@ -9,15 +9,17 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 from scipy.io import loadmat
+from scipy.signal import get_window
 
 import config as C
-from build_spectra import COLORS, INK, SOFT
+from build_spectra import COLORS, INK, SOFT, in_band, noisy_record, pieces
 from cross_validate import HYBRID_BASE, TARGETS, rms_error
 from design_sea_states import hs_upper
 from evaluate import COLOR, cal_errors, chosen
-from invert_spectra import RAO_FLOOR, noise_level, rao_squared, wave_spectrum
+from invert_spectra import (GAMMA_START, RAO_FLOOR, fine_grid, noise_level, on_bins, rao_squared,
+                            smooth, wave_spectrum, welch_kernel)
 
-NAME = {HYBRID_BASE: "physics", "pls": "PLS", "pcr": "PCR", "hybrid": "hybrid"}
+NAME = {HYBRID_BASE: "physics", "pls": "PLS", "pcr": "PCR", "hybrid": "CIM hybrid"}
 UNIT = {"heave": "m", "pitch": "deg", "Hs": "m", "Tp": "s"}
 LIGHT = "#c9c8c3"   # the runs that are not the chosen one
 
@@ -61,6 +63,15 @@ def show(fig, height=360):
     st.plotly_chart(fig)
 
 
+def have_output():
+    """True if the OSP output of the chosen run is on this computer; if not, say how to make it."""
+    if (C.OUTPUT_DIR / row.output_file).exists():
+        return True
+    st.info(f"The OSP output is not on this computer (it is not in git): "
+            f"`python run_osp.py {run_id}` makes it.")
+    return False
+
+
 def end(takeaway, detail):
     """The takeaway, the details folded away, and a link to the next page."""
     st.markdown(f"**{takeaway}**")
@@ -80,8 +91,9 @@ def start():
         "and work out the waves from it. Two numbers describe the waves:\n"
         "- **Hs**, the significant wave height: how high the waves are [m]\n"
         "- **Tp**, the peak period: the time between the biggest wave crests [s]\n\n"
-        "**Waves** (Hs, Tp) → **ship** (its RAO: how much it moves per metre of wave) → "
-        "**motions** (heave, pitch) → **spectrum** → **estimate** of Hs and Tp")
+        "**Waves** (a JONSWAP spectrum set by Hs and Tp) → **ship** (its RAO: how much it moves "
+        "per metre of wave) → **motions** (heave, pitch) → **spectrum** (Welch's method) → "
+        "**estimate** of Hs and Tp (fit a JONSWAP spectrum back)")
     with st.container(border=True):
         assumptions()
     st.subheader("The steps")
@@ -90,7 +102,7 @@ def start():
     st.subheader(f"The answer, on {len(test)} sea states the methods never saw")
     hybrid, alone = test_error("hybrid"), test_error(HYBRID_BASE)
     for col, t, target in zip(st.columns(2), range(len(TARGETS)), TARGETS):
-        col.metric(f"{target} error, hybrid", f"{hybrid[t]:.1f} %", delta_color="inverse",
+        col.metric(f"{target} error, CIM hybrid", f"{hybrid[t]:.1f} %", delta_color="inverse",
                    delta=f"{hybrid[t] - alone[t]:+.1f} points against physics alone")
     st.caption("RMS relative error. Pick a sea state in the sidebar and follow it through the steps.")
 
@@ -190,12 +202,8 @@ def simulate():
         f"state runs {row.ramp_s:.0f} s to settle (shaded, thrown away), then "
         f"{row.duration_s / 60:.0f} min that we keep. We log **heave** (up and down) and "
         "**pitch** (bow up and down).")
-    path = C.OUTPUT_DIR / row.output_file
-    if not path.exists():
-        st.info(f"The OSP output is not on this computer (it is not in git): "
-                f"`python run_osp.py {run_id}` makes it.")
-    else:
-        motions = pd.read_csv(path, usecols=["time", *C.MOTIONS])
+    if have_output():
+        motions = pd.read_csv(C.OUTPUT_DIR / row.output_file, usecols=["time", *C.MOTIONS])
         fig = make_subplots(rows=len(C.MOTIONS), cols=1, shared_xaxes=True, vertical_spacing=0.12,
                             subplot_titles=["Heave [m], positive down", "Pitch [deg]"])
         for r, motion in enumerate(C.MOTIONS, 1):
@@ -222,6 +230,10 @@ def spectra():
         "each frequency. Long waves (large Tp) give a peak to the left, short waves to the right, "
         "and higher waves lift the whole curve. A little sensor noise is added first, as a real "
         "motion sensor would have.")
+    st.markdown(f"**How it is made, for your sea state {run_id}:** Welch's method.")
+    if have_output():
+        welch_steps()
+    st.markdown("**Your spectra against the other test runs:**")
     fig = panels([f"{m.capitalize()} [{UNIT[m]}²/Hz]" for m in C.MOTIONS])
     others = np.flatnonzero((runs.split == "test") & (runs.run_id != run_id))
     noise = noise_level(row.dt_s)
@@ -243,13 +255,100 @@ def spectra():
     show(fig)
     end(f"Where the peak sits gives Tp, the area under it gives Hs. These {len(C.MOTIONS)} × "
         f"{len(freq)} = {psd[0].size} numbers are all that any method sees of a sea state.",
-        f"Welch's method: the record is cut into {C.WELCH_SEGMENT_S:.0f} s pieces that overlap "
-        f"by {100 * C.WELCH_OVERLAP:.0f} %, each gets a spectrum, and they are averaged, so the "
-        f"frequency step is 1/{C.WELCH_SEGMENT_S:.0f} Hz. Only {C.FREQ_RANGE_HZ[0]}-"
-        f"{C.FREQ_RANGE_HZ[1]} Hz is kept: outside it there is mostly noise. The sensor noise "
-        f"(std {C.SENSOR_NOISE_STD['heave']} m and {C.SENSOR_NOISE_STD['pitch']} deg) is an "
-        "assumed value, not from a data sheet.  \n"
+        "Why pieces: a spectrum of one stretch of record jumps up and down by about its own size "
+        "from one frequency to the next (the thin lines), and a longer stretch does not help. "
+        f"Averaging the pieces calms that down. The price is detail: a {C.WELCH_SEGMENT_S:.0f} s piece gives "
+        f"a frequency step of 1/{C.WELCH_SEGMENT_S:.0f} Hz. The taper (Hann window) fades each "
+        "piece in and out, so its cut ends do not add false frequencies, but it also smears a "
+        "sharp peak a little over its neighbours; step 4 allows for that. Only "
+        f"{C.FREQ_RANGE_HZ[0]}-{C.FREQ_RANGE_HZ[1]} Hz is kept: outside it there is mostly noise. "
+        f"The sensor noise (std {C.SENSOR_NOISE_STD['heave']} m and "
+        f"{C.SENSOR_NOISE_STD['pitch']} deg) is an assumed value, not from a data sheet.  \n"
         "Script: `build_spectra.py` → `data/spectra.npz`")
+
+
+def welch_steps():
+    """Welch's method on the chosen run's heave: cut, taper, one spectrum per piece, average."""
+    dt = row.dt_s
+    heave = noisy_record(row)[0]
+    heave -= heave.mean()
+    n = round(C.WELCH_SEGMENT_S / dt)
+    step = n - round(n * C.WELCH_OVERLAP)
+    f, density = pieces(heave, dt)
+    band = in_band(f)
+    f, density = f[band], density[band]
+    t = np.arange(heave.size) * dt
+    gap = 6 * heave.std()
+    fig = panels(["Cut into overlapping pieces, each tapered", "A spectrum per piece, then the average"])
+    shown = t < 2 * C.WELCH_SEGMENT_S
+    fig.add_scatter(x=t[shown], y=heave[shown], mode="lines", name="heave, with sensor noise",
+                    line=dict(color=SOFT, width=1), hoverinfo="skip", row=1, col=1)
+    rest = density[:, len(COLORS):]
+    fig.add_scatter(x=np.tile(np.append(f, np.nan), rest.shape[1]),
+                    y=np.vstack([rest, np.full(rest.shape[1], np.nan)]).T.ravel(), mode="lines",
+                    name="the other pieces", line=dict(color=LIGHT, width=1), hoverinfo="skip",
+                    row=1, col=2)
+    window = get_window("hann", n)
+    for k, color in enumerate(COLORS):
+        s = slice(k * step, k * step + n)
+        name = f"piece {k + 1}: {t[s][0]:.0f}-{t[s][-1] + dt:.0f} s"
+        fig.add_scatter(x=t[s], y=(heave[s] - heave[s].mean()) * window - (k + 1) * gap,
+                        mode="lines", name=name, legendgroup=name, line=dict(color=color, width=1.5),
+                        hoverinfo="skip", row=1, col=1)
+        fig.add_scatter(x=f, y=density[:, k], mode="lines", name=name, legendgroup=name,
+                        showlegend=False, line=dict(color=color, width=1.5), hoverinfo="skip",
+                        row=1, col=2)
+    fig.add_scatter(x=f, y=density.mean(axis=1), mode="lines", name="their average: your spectrum",
+                    line=dict(color=INK, width=3), row=1, col=2,
+                    hovertemplate="%{x:.3f} Hz: %{y:.2e} m²/Hz<extra></extra>")
+    fig.update_xaxes(title="Time [s]", row=1, col=1)
+    fig.update_yaxes(visible=False, row=1, col=1)
+    fig.update_xaxes(title="Frequency [Hz]", row=1, col=2)
+    fig.update_yaxes(type="log", exponentformat="power", title="Heave [m²/Hz]", row=1, col=2)
+    show(fig, 420)
+    st.caption(f"Heave only (pitch is done the same way). A new {C.WELCH_SEGMENT_S:.0f} s piece "
+               f"starts every {step * dt:.0f} s ({100 * C.WELCH_OVERLAP:.0f} % overlap), "
+               f"{density.shape[1]} pieces over the {C.DURATION_S / 60:.0f} min; the first 3 are "
+               "drawn. Time from the start of the kept record.")
+
+
+def fit_chain(est):
+    """What the fit compares, for heave: a JONSWAP spectrum through our RAO and Welch's smoothing."""
+    hs, tp, gamma = est[[f"{p}_{HYBRID_BASE}" for p in ("Hs", "Tp", "gamma")]]
+    grid = fine_grid(freq)
+    wave = wave_spectrum(grid, hs, tp, gamma)
+    rao2 = rao(str(C.INVERSION_MAT), grid, row.heading_deg)[0] ** 2
+    motion = rao2 * wave
+    noise = noise_level(row.dt_s)[0]
+    seen = smooth(motion[None], welch_kernel(row.dt_s))[0] + noise
+    used = on_bins(rao2) > RAO_FLOOR**2 * rao2.max()
+    fig = panels(["1. JONSWAP waves [m²/Hz]", "2. × |RAO|²: heave [m²/Hz]",
+                  "3. As Welch sees it [m²/Hz]"])
+    fig.add_scatter(x=grid, y=wave, mode="lines", fill="tozeroy", name=f"JONSWAP, γ = {gamma:.1f}",
+                    line=dict(color=COLORS[2], width=2), row=1, col=1)
+    fig.add_annotation(x=1 / tp, y=wave.max() / 2, xref="x", yref="y", showarrow=False,
+                       xanchor="left", xshift=6, text=f"area → Hs = {hs:.2f} m", bgcolor="white")
+    fig.add_vline(x=1 / tp, line=dict(color=INK, dash="dot", width=1), row=1, col=1,
+                  annotation_text=f"1 / Tp, Tp = {tp:.1f} s")
+    fig.add_scatter(x=grid, y=motion, mode="lines", name="the heave it should cause",
+                    line=dict(color=COLORS[0], width=2), row=1, col=2)
+    fig.add_scatter(x=grid, y=motion, mode="lines", name="before smoothing", hoverinfo="skip",
+                    line=dict(color=LIGHT, width=1.5), row=1, col=3)
+    fig.add_scatter(x=freq, y=seen, mode="lines", name="smoothed by Welch + sensor noise",
+                    line=dict(color=COLORS[0], width=2.5), row=1, col=3)
+    fig.add_scatter(x=freq[~used], y=psd[i, 0, ~used], mode="markers", name="measured, not used",
+                    marker=dict(color=LIGHT, size=7), row=1, col=3)
+    fig.add_scatter(x=freq[used], y=psd[i, 0, used], mode="markers", name="measured (step 3)",
+                    marker=dict(color=INK, size=7), row=1, col=3)
+    top = max(seen.max(), psd[i, 0].max())
+    fig.update_yaxes(type="log", exponentformat="power", dtick=1,
+                     range=np.log10([noise / 5, 3 * top]), row=1, col=3)
+    fig.update_xaxes(title="Frequency [Hz]", range=list(C.FREQ_RANGE_HZ))
+    show(fig)
+    st.caption("The fit changes Hs, Tp and γ until the blue line in panel 3 comes as close as it "
+               "can to the black dots, for heave and pitch at once (pitch not drawn). Where it "
+               "stays off, our RAO differs from the true ship's. Grey dots: the RAO is too small "
+               "there to trust. Panel 3 is in log scale, as the fit compares them.")
 
 
 def physics():
@@ -261,8 +360,9 @@ def physics():
     st.latex(r"S_\text{motion}(f) = |\text{RAO}(f)|^2 \, S_\text{wave}(f)")
     st.markdown(
         "The catch: nobody knows the RAO of a real ship exactly. The runs were made with one RAO "
-        "table (*the true ship*); the method only gets another table of the same vessel "
-        "(*our model*), as it would at sea.")
+        f"table (`{C.TRUE_MAT.name}`, *the true ship*). The method only gets the table from a "
+        f"separate calculation of the same vessel (`{C.INVERSION_MAT.name}`, *our model*, "
+        "1.4 m shorter and 0.4 m less draught), as it would at sea.")
     fine = np.linspace(*C.FREQ_RANGE_HZ, 300)
     fig = panels([f"{m.capitalize()} RAO [{UNIT[m]}/m]" for m in C.MOTIONS])
     for mat, name, color in ((C.TRUE_MAT, "true ship (made the runs)", SOFT),
@@ -290,6 +390,9 @@ def physics():
     fig.update_xaxes(title="Frequency [Hz]")
     fig.update_yaxes(title="Wave spectrum [m²/Hz]")
     show(fig)
+    st.markdown("**How the green line is found:** try a JONSWAP spectrum, work out the heave "
+                "spectrum it would give, and compare that with the measured one.")
+    fit_chain(est)
     for col, target in zip(st.columns(len(TARGETS)), TARGETS):
         value, true = est[f"{target}_{HYBRID_BASE}"], row[target]
         col.metric(f"{target} from physics", f"{value:.2f} {UNIT[target]}", delta_color="off",
@@ -300,10 +403,11 @@ def physics():
         "the curve, and with it Hs.",
         "Two ways. **Divide** (the dots): the formula above, only where |RAO| is above "
         f"{100 * RAO_FLOOR:.0f} % of its peak, since dividing by almost zero blows up the noise; "
-        "Hs = 4 √area and Tp = 1 / peak frequency. **Fit** (the green line): the JONSWAP spectrum "
-        "(Hs, Tp, γ) whose motion spectra best match the measured heave and pitch spectra at once, "
-        "with the smoothing of Welch's method and the noise floor included. The fit is *the "
-        "physics estimate* from here on. Nothing is fitted to the runs: the only inputs are the "
+        "Hs = 4 √area and Tp = 1 / peak frequency. **Fit** (the green line, worked out in the three "
+        "panels): least squares on the log of the spectra, starting from the division and "
+        f"γ = {GAMMA_START}, over the same bins as the division. Without the smoothing of panel 3, "
+        "long narrow peaks give a Tp about 3 % too long. The fit is *the physics estimate* from "
+        "here on. Nothing is fitted to the runs: the only inputs are the "
         "spectra, our RAO model and the noise level. With the true ship's RAO the error almost "
         "disappears, so what is left comes from the RAO mismatch.  \n"
         "Script: `invert_spectra.py` → `data/physics.csv`")
@@ -318,7 +422,11 @@ def learn():
         "predict Hs and Tp\n"
         "- **PCR** (principal component regression) first finds the main patterns in the "
         "spectra, then fits a straight line on them\n"
-        "- **hybrid** starts from the physics estimate and lets PLS learn only the correction\n\n"
+        "- **CIM hybrid** starts from the physics estimate and lets PLS learn only the correction. "
+        "It follows Harald Martens' CIM-ML (Continuous, Interpretable, Minimalistic Machine "
+        "Learning): model what you know, let the data learn only what that misses, keep it small. "
+        "It is interpretable and minimalistic, but not yet continuous: it is trained once, "
+        "not updated as new data arrive\n\n"
         "Each has one knob: how many patterns (*components*) to use. To set it fairly, a model is "
         f"fitted on 4/5 of the {C.N_CAL} calibration runs and scored on the last 5th, for each of the "
         f"{C.N_FOLDS} parts in turn (cross-validation). The test runs stay hidden.")
@@ -342,7 +450,7 @@ def learn():
     show(fig)
     hs, tp = cal_err["hybrid"]
     end("Too few components miss the pattern, too many start to learn noise; the dot marks the "
-        f"lowest point. The hybrid needs only {components['hybrid']} components and ends far below "
+        f"lowest point. The CIM hybrid needs only {components['hybrid']} components and ends far below "
         f"the others: Hs {hs:.1f} %, Tp {tp:.1f} %.",
         "The inputs are the log10 spectra, the targets log Hs and log Tp, both scaled to mean 0 "
         f"and std 1 on the training part only. {C.N_FOLDS} folds, repeated with "
@@ -388,8 +496,8 @@ def exam():
     st.dataframe(pd.DataFrame.from_dict(table, orient="index").round(2))
 
     hs, tp = errors["hybrid"]
-    end(f"The hybrid wins: Hs {hs:.1f} %, Tp {tp:.1f} %. The physics misses most for short waves "
-        "(small Tp), and that is what the hybrid corrects. The test errors are close to the "
+    end(f"The CIM hybrid wins: Hs {hs:.1f} %, Tp {tp:.1f} %. The physics misses most for short "
+        "waves (small Tp), and that is what the CIM hybrid corrects. The test errors are close to the "
         "cross-validation ones, so nothing was overfitted.",
         "RMS relative error [%]: *calibration* is the cross-validation error of step 5 (for the physics, "
         "which is not fitted, its error on the calibration runs), *test* is this step.\n\n"
@@ -422,8 +530,9 @@ def robustness():
     fig.update_yaxes(title="Hs error [%]", row=1, col=1)
     show(fig)
     end("A gain error goes straight into every method's Hs: from the motions alone, a ship that "
-        "moves 10 % more looks just like 10 % higher waves. A shift hurts PLS most, and the hybrid "
-        "loses most of its edge over the physics. A noise level other than in training, even less "
+        "moves 10 % more looks just like 10 % higher waves. A shift hurts PLS most, and the CIM "
+        "hybrid loses most of its edge over the physics, because it was never updated: the "
+        "missing 'continuous' part of CIM-ML. A noise level other than in training, even less "
         "noise, throws the learned models off (PLS badly), while the physics hardly moves.",
         "The dotted line is the setting of step 6. The gain and shift runs are new OSP runs with "
         "changed copies of `gunnerus.mat`; a new noise level needs no new runs. The Tp errors "

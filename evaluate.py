@@ -34,7 +34,8 @@ import pandas as pd
 
 import config as C
 from build_spectra import COLORS, SOFT, SURFACE, save, style
-from cross_validate import HYBRID_BASE, MODELS, TARGETS, base, fit_predict, load, rms_error
+from cross_validate import (HYBRID_BASE, LABEL, MODELS, TARGETS, base, fit_predict, load,
+                            rms_error)
 
 N_BOOTSTRAP = 2000
 SHOWN = [HYBRID_BASE, "pls", "hybrid"]      # in figures/test.png: the hybrid, its start, PLS alone
@@ -105,7 +106,8 @@ def plot_cv(components, cal_error):
     for t, (ax, target) in enumerate(zip(axes, TARGETS)):
         for model, n in components.items():
             error = cv[cv.model == model].set_index("components")[f"{target}_rms"]
-            ax.semilogy(error.index, error, color=COLOR[model], lw=1.4, label=model)
+            ax.semilogy(error.index, error, color=COLOR[model], lw=1.4,
+                        label=LABEL.get(model, model))
             ax.plot(n, error[n], "o", color=COLOR[model], ms=5)
         ax.axhline(cal_error[HYBRID_BASE][t], color=SOFT, lw=1.0, ls=(0, (4, 3)),
                    label=f"physics ({HYBRID_BASE})")
@@ -125,7 +127,7 @@ def plot_test(log_true, log_pred):
         ax.axhline(0.0, color=SOFT, lw=1.0)
         for method in SHOWN:
             error = 100.0 * (np.exp(log_pred[method][:, t] - log_true[:, t]) - 1.0)
-            ax.plot(tp, error, "o", color=COLOR[method], ms=4, label=method)
+            ax.plot(tp, error, "o", color=COLOR[method], ms=4, label=LABEL.get(method, method))
         style(ax, target, "True Tp [s]", "Relative error [%]")
     save(fig, axes, f"Error of the estimates on the {len(tp)} test runs", "test.png")
 
