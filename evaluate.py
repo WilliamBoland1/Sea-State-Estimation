@@ -5,6 +5,7 @@ figures/cv.png and figures/test.png.
 
     python evaluate.py           # fit on every cal run, score the test runs, plot
     python evaluate.py --check   # check the file, and that no test run leaks into the models
+    python evaluate.py --plot    # only redraw figures/cv.png and figures/test.png
 
 Every model of step 5 is fitted on all cal runs with the number of components that had
 the lowest Hs + Tp error in data/cv.csv, and estimates the test runs. The physics
@@ -34,11 +35,12 @@ import pandas as pd
 
 import config as C
 from build_spectra import COLORS, SOFT, SURFACE, save, style
+
+GRID_LINE = "#c9c8c3"   # the thin line joining a run's two estimates in figures/test.png
 from cross_validate import (HYBRID_BASE, LABEL, MODELS, TARGETS, base, fit_predict, load,
                             rms_error)
 
 N_BOOTSTRAP = 2000
-SHOWN = [HYBRID_BASE, "pls", "hybrid"]      # in figures/test.png: the hybrid, its start, PLS alone
 COLOR = dict(zip(MODELS, COLORS)) | {HYBRID_BASE: SOFT}
 
 
@@ -101,7 +103,7 @@ def report(log_true, log_pred, components, cal_error):
 def plot_cv(components, cal_error):
     """CV error against the number of components, and the cal error of the physics estimate."""
     cv = pd.read_csv(C.CV_FILE)
-    fig, axes = plt.subplots(1, len(TARGETS), figsize=(8.5, 3.9), facecolor=SURFACE,
+    fig, axes = plt.subplots(1, len(TARGETS), figsize=(4.6, 2.6), facecolor=SURFACE,
                              layout="constrained")
     for t, (ax, target) in enumerate(zip(axes, TARGETS)):
         for model, n in components.items():
@@ -110,26 +112,47 @@ def plot_cv(components, cal_error):
                         label=LABEL.get(model, model))
             ax.plot(n, error[n], "o", color=COLOR[model], ms=5)
         ax.axhline(cal_error[HYBRID_BASE][t], color=SOFT, lw=1.0, ls=(0, (4, 3)),
-                   label=f"physics ({HYBRID_BASE})")
+                   label=LABEL[HYBRID_BASE])
         ax.yaxis.set_major_formatter(LogFormatter())      # 60, not 6 x 10^1
         ax.yaxis.set_minor_formatter(LogFormatter())
-        style(ax, target, "Components", "RMS relative error [%]")
-    save(fig, axes, f"Cross-validation error on the {C.N_CAL} cal runs; dots mark the chosen "
-                    "number of components", "cv.png")
+        style(ax, f"${target[0]}_{target[1]}$", "Number of components $A$",
+              "CV RMS relative error [%]" if t == 0 else "")
+    save(fig, axes, None, "cv.png")
 
 
 def plot_test(log_true, log_pred):
-    """Relative error of every test run against its true Tp."""
-    tp = np.exp(log_true[:, TARGETS.index("Tp")])
-    fig, axes = plt.subplots(1, len(TARGETS), figsize=(8.5, 3.9), sharex=True, facecolor=SURFACE,
-                             layout="constrained")
-    for t, (ax, target) in enumerate(zip(axes, TARGETS)):
-        ax.axhline(0.0, color=SOFT, lw=1.0)
-        for method in SHOWN:
-            error = 100.0 * (np.exp(log_pred[method][:, t] - log_true[:, t]) - 1.0)
-            ax.plot(tp, error, "o", color=COLOR[method], ms=4, label=LABEL.get(method, method))
-        style(ax, target, "True Tp [s]", "Relative error [%]")
-    save(fig, axes, f"Error of the estimates on the {len(tp)} test runs", "test.png")
+    """What the hybrid does to each test run: its Hs error before (physics fit) and after.
+
+    One question: where is the physics fit wrong, and does the correction remove it? So only
+    the Hs error of the physics fit and the hybrid is shown, joined per run, against the true
+    Tp. The Tp errors and PLS are in the table of the report.
+    """
+    hs, tp = TARGETS.index("Hs"), TARGETS.index("Tp")
+    true_tp = np.exp(log_true[:, tp])
+    error = {m: 100.0 * (np.exp(log_pred[m][:, hs] - log_true[:, hs]) - 1.0)
+             for m in (HYBRID_BASE, "hybrid")}
+    fig, ax = plt.subplots(figsize=(3.5, 2.7), facecolor=SURFACE, layout="constrained")
+    ax.axhline(0.0, color=SOFT, lw=0.8)
+    ax.vlines(true_tp, error[HYBRID_BASE], error["hybrid"], color=GRID_LINE, lw=0.8, zorder=1)
+    ax.plot(true_tp, error[HYBRID_BASE], "o", mfc=SURFACE, mec=SOFT, mew=1.0, ms=4.5, zorder=2,
+            label=LABEL[HYBRID_BASE])
+    ax.plot(true_tp, error["hybrid"], "o", color=COLOR["hybrid"], mec=SURFACE, mew=0.6, ms=5,
+            zorder=3, label=LABEL["hybrid"])
+    style(ax, "", "True peak period $T_p$ [s]", "$H_s$ relative error [%]")
+    ax.legend(loc="upper right", frameon=False, fontsize=7.5, labelcolor=SOFT, handletextpad=0.2)
+    C.FIG_DIR.mkdir(exist_ok=True)
+    fig.savefig(C.FIG_DIR / "test.png", dpi=300)
+
+
+def plot_saved_test():
+    """figures/cv.png and figures/test.png again from the saved files, without fitting anything."""
+    components = chosen()
+    plot_cv(components, cal_errors(components))
+    out = pd.read_csv(C.TEST_FILE)
+    log_true = np.log(out[TARGETS].to_numpy())
+    log_pred = {m: np.log(out[[f"{t}_{m}" for t in TARGETS]].to_numpy())
+                for m in (HYBRID_BASE, "hybrid")}
+    plot_test(log_true, log_pred)
 
 
 def build():
@@ -178,7 +201,12 @@ if __name__ == "__main__":
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true",
                         help="check the file, and that no test run leaks into the models")
-    if parser.parse_args().check:
+    parser.add_argument("--plot", action="store_true",
+                        help="only redraw figures/cv.png and figures/test.png from the saved files")
+    args = parser.parse_args()
+    if args.check:
         check()
+    elif args.plot:
+        plot_saved_test()
     else:
         build()

@@ -38,8 +38,8 @@ import config as C
 
 TARGETS = ["Hs", "Tp"]
 HYBRID_BASE = "fit_all"     # the physics estimate in physics.csv that the hybrid corrects
-# Name shown in figures: the hybrid follows Martens' CIM-ML, minus the continuous updating.
-LABEL = {"hybrid": "CIM hybrid"}
+# Names shown in figures, the same as in the report.
+LABEL = {"hybrid": "Hybrid", "pls": "PLS", "pcr": "PCR", HYBRID_BASE: "Physics fit"}
 
 
 def autoscale(train, *others):

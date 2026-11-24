@@ -5,6 +5,7 @@ figures/robust.png.
 
     python robustness.py           # make the .mat files, run what is missing in OSP, score
     python robustness.py --check   # check the .mat files, the control and a known answer
+    python robustness.py --plot    # only redraw figures/robust.png from data/robust.csv
 
 Why
 ---
@@ -53,10 +54,14 @@ from invert_spectra import (METHODS, estimate, fine_grid, noise_level, rao_squar
 HEAVE, PITCH = 2, 4         # rows of motionRAO.amp
 NOMINAL = {"gain": 1.0, "shift": 1.0, "noise": C.SENSOR_NOISE_STD["heave"]}
 PRINTED = ["fit_pitch", HYBRID_BASE, "pls", "pcr", "hybrid"]
-SHOWN = {"fit_pitch": (SOFT, (0, (4, 3))), HYBRID_BASE: (SOFT, "-"),
-         "pls": (COLORS[0], "-"), "hybrid": (COLORS[2], "-")}
-XLABEL = {"gain": "RAO gain [-]", "shift": "RAO frequency shift [-]",
-          "noise": "Sensor noise std [m, deg]"}
+# In figures/robust.png: the physics base, the data alone, and the hybrid. Colour + marker,
+# so the lines can also be told apart in grey print.
+SHOWN = {HYBRID_BASE: (SOFT, "o"), "pls": (COLORS[0], "s"), "hybrid": (COLORS[2], "D")}
+XLABEL = {"gain": "RAO gain $g$", "shift": "RAO frequency shift $s$",
+          "noise": r"Sensor noise $\sigma_n$ [m, deg]"}
+TITLE = {"gain": "Gain: RAOs $g$ times larger", "shift": "Shift: RAO peaks moved",
+         "noise": "Sensor noise"}
+YTICKS = {"Hs": [1, 2, 5, 10, 20, 50, 100], "Tp": [0.5, 1, 2, 5, 10, 20, 50]}
 
 
 def name(kind, level):
@@ -176,28 +181,44 @@ def build():
 
 
 def plot(table):
-    """Error against the level of every kind of change, with its bootstrap interval."""
+    """Error against the size of every change, one log scale per row so the panels compare."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator
 
     kinds = list(NOMINAL)
-    # Not sharey: PLS with another noise level would flatten the other panels.
-    fig, axes = plt.subplots(len(TARGETS), len(kinds), figsize=(10.0, 6.4),
+    fig, axes = plt.subplots(len(TARGETS), len(kinds), figsize=(7.0, 4.3), sharey="row",
                              facecolor=SURFACE, layout="constrained")
     for t, target in enumerate(TARGETS):
         for k, kind in enumerate(kinds):
             ax = axes[t, k]
-            for method, (color, dash) in SHOWN.items():
+            ax.axvline(NOMINAL[kind], color=SOFT, lw=0.8, ls=":")
+            for method, (color, marker) in SHOWN.items():
                 rows = table[(table.kind == kind) & (table.method == method)].sort_values("level")
-                ax.plot(rows.level, rows[f"{target}_rms"], color=color, ls=dash, lw=1.4,
-                        marker="o", ms=4, label=LABEL.get(method, method))
                 ax.fill_between(rows.level, rows[f"{target}_low"], rows[f"{target}_high"],
                                 color=color, alpha=0.12, lw=0)
-            ax.axvline(NOMINAL[kind], color=SOFT, lw=0.8, ls=":")
-            style(ax, f"{target}, {kind}", XLABEL[kind], "RMS relative error [%]" if k == 0 else "")
-    save(fig, axes.ravel(), "Test-run error with a true vessel or sensor the models were not "
-                            "fitted to; dotted line = step 6", "robust.png")
+                ax.plot(rows.level, rows[f"{target}_rms"], color=color, lw=1.4, marker=marker,
+                        ms=4, mec=SURFACE, mew=0.5, label=LABEL.get(method, method))
+            ax.set_yscale("log")
+            ax.yaxis.set_major_locator(FixedLocator(YTICKS[target]))
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+            ax.yaxis.set_minor_locator(NullLocator())
+            if t == 0 and k == 0:
+                ax.annotate("trained", (NOMINAL[kind], 1.0), xycoords=("data", "axes fraction"),
+                            xytext=(3, -2), textcoords="offset points", fontsize=7, color=SOFT,
+                            va="top")
+            style(ax, TITLE[kind] if t == 0 else "", XLABEL[kind] if t == 1 else "",
+                  f"${target[0]}_{target[1]}$ RMS error [%]" if k == 0 else "")
+        low = table[f"{target}_low"][table.method.isin(list(SHOWN))].min()
+        high = table[f"{target}_high"][table.method.isin(list(SHOWN))].max()
+        axes[t, 0].set_ylim(low / 1.2, high * 1.2)
+    save(fig, axes.ravel(), None, "robust.png")
+
+
+def plot_saved():
+    """figures/robust.png again from data/robust.csv, without running anything."""
+    plot(pd.read_csv(C.ROBUST_FILE))
 
 
 def check():
@@ -256,7 +277,12 @@ if __name__ == "__main__":
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true",
                         help="check the .mat files, the control and the known answer")
-    if parser.parse_args().check:
+    parser.add_argument("--plot", action="store_true",
+                        help="only redraw figures/robust.png from data/robust.csv")
+    args = parser.parse_args()
+    if args.check:
         check()
+    elif args.plot:
+        plot_saved()
     else:
         build()

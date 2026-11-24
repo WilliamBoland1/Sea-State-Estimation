@@ -134,13 +134,17 @@ def style(ax, title, xlabel, ylabel):
 
 
 def save(fig, axes, title, name):
-    """The legend of the first panel under the figure, the title over it, then figures/<name>."""
+    """The legend of the first panel under the figure, the title over it, then figures/<name>.
+
+    title=None leaves the title out, for figures whose caption is in the report.
+    """
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="outside lower center", ncols=4, frameon=False, fontsize=8,
                labelcolor=SOFT)
-    fig.suptitle(title, x=0.01, ha="left", fontsize=11, color=INK)
+    if title:
+        fig.suptitle(title, x=0.01, ha="left", fontsize=11, color=INK)
     C.FIG_DIR.mkdir(exist_ok=True)
-    fig.savefig(C.FIG_DIR / name, dpi=150)
+    fig.savefig(C.FIG_DIR / name, dpi=300 if title is None else 150)
 
 
 def check():
